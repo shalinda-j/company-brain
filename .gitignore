@@ -1,0 +1,17 @@
+# Secrets & data — NEVER commit these
+.env
+data/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

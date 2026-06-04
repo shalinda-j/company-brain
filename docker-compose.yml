@@ -1,0 +1,45 @@
+# Company Brain — base stack.
+#
+# Security posture by default:
+#   - Qdrant has NO published ports. It is only reachable by the API over the
+#     internal Docker network. It is never exposed to the internet.
+#   - The API is published ONLY on 127.0.0.1:8000 (loopback). Put your own
+#     reverse proxy (or the optional tls overlay) in front of it for remote use.
+#
+# Remote HTTPS in one shot? Use the TLS overlay:
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - brain_net
+    # NOTE: intentionally no `ports:` — Qdrant stays private.
+
+  brain-api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - qdrant
+    env_file:
+      - .env
+    environment:
+      QDRANT_URL: "http://qdrant:6333"
+      BRAIN_DATA_DIR: "/data"
+      EMBED_CACHE_DIR: "/data/models"
+    volumes:
+      - ./data:/data          # vault (Markdown, your source of truth) + audit log + model cache
+    ports:
+      - "127.0.0.1:8000:8000" # loopback only by default
+    networks:
+      - brain_net
+
+networks:
+  brain_net:
+    driver: bridge
+
+volumes:
+  qdrant_data:

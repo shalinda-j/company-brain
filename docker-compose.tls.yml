@@ -1,0 +1,37 @@
+# Optional overlay: put Caddy in front of the API for automatic HTTPS.
+#
+# Usage:
+#   1. Point a DNS A record (e.g. brain.example.com) at this droplet.
+#   2. Set BRAIN_DOMAIN and ACME_EMAIL in .env
+#   3. docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+#
+# Caddy obtains and renews a Let's Encrypt certificate automatically.
+# When this overlay is used, the API no longer needs a host port — Caddy
+# reaches it over the internal network.
+
+services:
+  brain-api:
+    # Remove the loopback host-port mapping; Caddy proxies internally.
+    ports: []
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - brain-api
+    environment:
+      BRAIN_DOMAIN: "${BRAIN_DOMAIN}"
+      ACME_EMAIL: "${ACME_EMAIL}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - brain_net
+
+volumes:
+  caddy_data:
+  caddy_config:

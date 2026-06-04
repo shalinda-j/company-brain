@@ -1,0 +1,21 @@
+# Automatic HTTPS for the Company Brain API.
+# {$BRAIN_DOMAIN} and {$ACME_EMAIL} are read from the environment.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$BRAIN_DOMAIN} {
+	encode gzip
+
+	# Security headers
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	reverse_proxy brain-api:8000
+}
