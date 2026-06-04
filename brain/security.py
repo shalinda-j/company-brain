@@ -8,6 +8,7 @@ Design notes (privacy & security):
 - Raw keys are NEVER written to logs. The audit log records the agent name only.
 - All note ids / paths are sanitized so a request can never escape the vault dir.
 """
+
 from __future__ import annotations
 
 import hashlib

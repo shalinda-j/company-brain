@@ -1,5 +1,10 @@
 # Company Brain 🧠
 
+[![CI](https://github.com/USERNAME/company-brain/actions/workflows/ci.yml/badge.svg)](https://github.com/USERNAME/company-brain/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-261230.svg)](https://docs.astral.sh/ruff/)
+
 A **private, self-hosted second brain** for you and your AI agents. It stores
 everything as plain Markdown (Obsidian-compatible), indexes it for **semantic
 search**, and exposes it over a **REST API** and an **MCP server** so any AI
@@ -14,6 +19,13 @@ memory.
 - **Multi-agent** — every memory is tagged with the agent that wrote it, so
   agents can see what other agents have done. Saves tokens by recalling instead
   of re-deriving.
+- **Projects** — isolate memories per project (`avedit`, `weddinghub`, …); each
+  has its own vault folder and vector collection.
+- **Self-optimizing & safe** — near-duplicate detection on save, feedback-based
+  re-ranking, and one-command consolidation of duplicate memories.
+
+> See **[CAPABILITIES.md](CAPABILITIES.md)** for the full list of everything the
+> brain can do across MCP, REST, and CLI.
 
 ---
 
@@ -102,7 +114,9 @@ pip install -e .          # provides the `brain-mcp` command
       "env": {
         "BRAIN_URL": "https://brain.example.com",
         "BRAIN_API_KEY": "YOUR_API_KEY",
-        "BRAIN_AGENT": "claude-code"
+        "BRAIN_AGENT": "claude-code",
+        "BRAIN_PROJECT": "default",
+        "BRAIN_VERIFY_TLS": "true"
       }
     }
   }
@@ -112,16 +126,24 @@ pip install -e .          # provides the `brain-mcp` command
 That is the whole "take it with you" story: copy this snippet to any machine,
 fill in the URL + key, and that machine's AI is now connected to the same brain.
 Give each client a different key so `BRAIN_AGENT` activity stays attributable.
+Set `BRAIN_PROJECT` to scope a client to one project, and
+`BRAIN_VERIFY_TLS=false` if you use a self-signed certificate (IP-only setups).
 
 ### Tools the AI gets
 
 | Tool | What it does |
 |------|--------------|
-| `brain_save` | Remember something (content, title, category, tags) |
-| `brain_search` | Semantic search across all memories |
+| `brain_save` | Remember something (dedup-protected) |
+| `brain_ingest` | Capture conversation text as a memory |
+| `brain_search` | Semantic search (ranked by relevance + usefulness) |
 | `brain_get` | Read one memory in full by id |
 | `brain_recent` | List the latest memories |
 | `brain_activity` | See what each agent has been doing |
+| `brain_feedback` | Mark a memory useful → ranks higher later |
+| `brain_projects` | List all projects and their counts |
+| `brain_consolidate` | Merge near-duplicate memories in a project |
+
+All tools accept a `project` argument. See [CAPABILITIES.md](CAPABILITIES.md).
 
 ### Make it remember automatically
 
@@ -171,6 +193,21 @@ curl -s -X POST $BASE/reindex -H "Authorization: Bearer $KEY"
 | GET | `/activity?who=&n=` | Per-agent activity |
 | POST | `/reindex` | Rebuild index from vault |
 | DELETE | `/delete/{id}` | Remove a memory |
+
+## Command-line client
+
+The `brain` command (installed via `pip install -e .`) talks to the REST API,
+so it works from anywhere:
+
+```bash
+export BRAIN_URL=https://brain.example.com BRAIN_API_KEY=YOUR_KEY
+brain save "Decided to use Qdrant + FastAPI" --title "Stack" --category knowledge --tag infra
+brain search "what stack did we choose"
+brain recent
+brain activity --who cursor
+brain get <note_id>
+brain stats
+```
 
 ---
 
@@ -239,10 +276,23 @@ All settings are environment variables (see `.env.example`). Notable ones:
 ```bash
 python -m venv venv && . venv/bin/activate
 pip install -r requirements.txt
-python tests/test_smoke.py        # runs end-to-end with a fake embedder
+pip install -e ".[dev]"           # ruff + pytest + the brain / brain-mcp commands
+make check                        # lint + format-check + tests (offline)
 # run the API directly (embedded Qdrant):
 BRAIN_API_KEYS="dev-key:me" uvicorn api.server:app --reload
 ```
+
+The test suite runs fully offline — it uses a fake embedder, so no model is
+downloaded in CI. Common tasks are in the `Makefile` (`make help`).
+
+## Contributing
+
+Contributions are welcome! Please read:
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup, checks, and PR process
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [SECURITY.md](SECURITY.md) — report vulnerabilities privately
+- [CHANGELOG.md](CHANGELOG.md)
 
 ## License
 

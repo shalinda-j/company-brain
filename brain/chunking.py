@@ -1,6 +1,7 @@
 """Paragraph-aware chunking. Keeps related text together, falls back to a
 sliding window for very long paragraphs. Works fine on Unicode (Sinhala) text.
 """
+
 from __future__ import annotations
 
 

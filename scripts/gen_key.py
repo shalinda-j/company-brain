@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Generate a strong API key. Usage: python scripts/gen_key.py [agent-name]"""
+
 import secrets
 import sys
 

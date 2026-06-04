@@ -37,6 +37,18 @@ if ! docker compose version >/dev/null 2>&1; then
   fi
 fi
 
+# ---- 1b. Swap (small droplets) -------------------------------------------
+# The embedding model needs RAM to load. On a small droplet (<3 GB) with no
+# swap it can be OOM-killed on first start, so add a swapfile if missing.
+TOTAL_KB="$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 0)"
+HAS_SWAP="$(swapon --show 2>/dev/null | wc -l)"
+if [ "${TOTAL_KB:-0}" -lt 3000000 ] && [ "${HAS_SWAP:-0}" -eq 0 ] && [ ! -f /swapfile ]; then
+  cyan "Low RAM detected and no swap — adding a 2G swapfile..."
+  sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+  sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+  grep -q '/swapfile' /etc/fstab 2>/dev/null || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+fi
+
 # ---- 2. .env --------------------------------------------------------------
 gen_key() {
   python3 - "$1" <<'PY' 2>/dev/null || openssl rand -base64 32 | tr -d '/+=' | cut -c1-43

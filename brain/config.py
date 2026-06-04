@@ -1,8 +1,8 @@
-"""Configuration for Company Brain. All settings come from environment variables.
-
-Nothing secret is hard-coded. Secrets (API keys) are read from the environment
+"""Configuration for Company Brain v2. All settings come from environment
+variables. Nothing secret is hard-coded; secrets are read from the environment
 and never written to logs.
 """
+
 from __future__ import annotations
 
 import os
@@ -31,46 +31,80 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass
 class Config:
     # --- Storage ---------------------------------------------------------
-    data_dir: Path = field(default_factory=lambda: Path(os.getenv("BRAIN_DATA_DIR", "./data")).resolve())
+    data_dir: Path = field(
+        default_factory=lambda: Path(os.getenv("BRAIN_DATA_DIR", "./data")).resolve()
+    )
+
+    # --- Projects --------------------------------------------------------
+    # Each project is isolated: its own vault subfolder and its own Qdrant
+    # collection. A request without a project falls back to this default.
+    default_project: str = field(
+        default_factory=lambda: os.getenv("BRAIN_DEFAULT_PROJECT", "default")
+    )
 
     # --- Vector store (Qdrant) ------------------------------------------
-    # If QDRANT_URL is set, connect to a Qdrant server. Otherwise fall back to
-    # an embedded on-disk Qdrant under data_dir/qdrant (no server needed).
     qdrant_url: str | None = field(default_factory=lambda: os.getenv("QDRANT_URL") or None)
     qdrant_api_key: str | None = field(default_factory=lambda: os.getenv("QDRANT_API_KEY") or None)
-    qdrant_collection: str = field(default_factory=lambda: os.getenv("QDRANT_COLLECTION", "company_brain"))
+    # Base name; the real collection is f"{base}__{project}".
+    qdrant_collection: str = field(
+        default_factory=lambda: os.getenv("QDRANT_COLLECTION", "company_brain")
+    )
 
-    # --- Embeddings ------------------------------------------------------
-    # Default is a multilingual model so Sinhala + English + code all work.
-    # Lighter/faster:  sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 (384-dim)
-    # Best quality:    intfloat/multilingual-e5-large (1024-dim, heavier on CPU)
+    # --- Embeddings (local, CPU) ----------------------------------------
     embed_model: str = field(
         default_factory=lambda: os.getenv(
-            "EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+            "EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
         )
     )
-    embed_cache_dir: str | None = field(default_factory=lambda: os.getenv("EMBED_CACHE_DIR") or None)
+    embed_cache_dir: str | None = field(
+        default_factory=lambda: os.getenv("EMBED_CACHE_DIR") or None
+    )
 
     # --- Chunking --------------------------------------------------------
     chunk_size: int = field(default_factory=lambda: _int("CHUNK_SIZE", 1000))
     chunk_overlap: int = field(default_factory=lambda: _int("CHUNK_OVERLAP", 150))
 
+    # --- Self-optimization / safe learning ------------------------------
+    # On save, if a near-identical memory already exists (cosine >= threshold),
+    # treat it as a duplicate instead of storing a second copy.
+    safe_save: bool = field(default_factory=lambda: _bool("SAFE_SAVE", True))
+    dedup_threshold: float = field(default_factory=lambda: _float("DEDUP_THRESHOLD", 0.96))
+    # Search re-ranking: blend semantic score with a memory's usefulness score.
+    feedback_weight: float = field(default_factory=lambda: _float("FEEDBACK_WEIGHT", 0.15))
+    # How many extra candidates to fetch before re-ranking.
+    search_overfetch: int = field(default_factory=lambda: _int("SEARCH_OVERFETCH", 3))
+
+    # --- Optional LLM summarization for /ingest -------------------------
+    # OFF by default to preserve the local-only / private posture. When on and
+    # an API key is configured, /ingest summarizes long text before storing.
+    summarize: bool = field(default_factory=lambda: _bool("BRAIN_SUMMARIZE", False))
+    llm_provider: str = field(default_factory=lambda: os.getenv("BRAIN_LLM_PROVIDER", "anthropic"))
+    llm_api_key: str | None = field(
+        default_factory=lambda: os.getenv("ANTHROPIC_API_KEY") or os.getenv("BRAIN_LLM_API_KEY")
+    )
+    llm_model: str = field(
+        default_factory=lambda: os.getenv("BRAIN_LLM_MODEL", "claude-3-5-haiku-latest")
+    )
+
     # --- API server ------------------------------------------------------
     api_host: str = field(default_factory=lambda: os.getenv("API_HOST", "0.0.0.0"))
     api_port: int = field(default_factory=lambda: _int("API_PORT", 8000))
-    # Comma-separated list of "key:agent" pairs, e.g. "abc123:claude-code,def456:cursor"
-    # A bare key with no agent defaults to agent name "default".
     api_keys_raw: str = field(default_factory=lambda: os.getenv("BRAIN_API_KEYS", ""))
     cors_origins: str = field(default_factory=lambda: os.getenv("CORS_ORIGINS", ""))
     rate_limit: str = field(default_factory=lambda: os.getenv("RATE_LIMIT", "120/minute"))
-    max_body_bytes: int = field(default_factory=lambda: _int("MAX_BODY_BYTES", 2_000_000))
+    max_body_bytes: int = field(default_factory=lambda: _int("MAX_BODY_BYTES", 4_000_000))
 
     # --- Behaviour -------------------------------------------------------
-    # When true, every search query is itself saved into the brain's activity log
-    # so the brain "remembers" everything you searched for.
     log_searches: bool = field(default_factory=lambda: _bool("LOG_SEARCHES", True))
 
     @property
@@ -85,10 +119,11 @@ class Config:
     def audit_log_path(self) -> Path:
         return self.data_dir / "audit.log"
 
+    def collection_for(self, project: str) -> str:
+        return f"{self.qdrant_collection}__{project}"
+
     def ensure_dirs(self) -> None:
         self.vault_dir.mkdir(parents=True, exist_ok=True)
-        for sub in ("conversations", "notes", "tasks", "knowledge", "activity"):
-            (self.vault_dir / sub).mkdir(parents=True, exist_ok=True)
         if not self.qdrant_url:
             self.qdrant_path.mkdir(parents=True, exist_ok=True)
 

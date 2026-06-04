@@ -5,6 +5,7 @@ The default model is multilingual (Sinhala + English + code). Swap it with the
 EMBED_MODEL env var. e5 models need "query:"/"passage:" prefixes; we add those
 automatically when the model name contains "e5".
 """
+
 from __future__ import annotations
 
 from typing import Protocol
