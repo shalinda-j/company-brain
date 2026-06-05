@@ -159,6 +159,154 @@ def cmd_reindex(a):
     return 0
 
 
+def cmd_recall(a):
+    d = _post("/recall", {"query": a.query, "project": _proj(a)})
+    if d is None:
+        return 1
+    print(d.get("context") or "(no context)")
+    print(f"\n[~{d.get('approx_tokens')} tokens · order: {', '.join(d.get('priority_order', []))}]")
+    return 0
+
+
+def cmd_related(a):
+    return _get(f"/related/{a.id}", {"project": _proj(a)})
+
+
+def cmd_entities(a):
+    return _get("/entities", {"project": _proj(a)})
+
+
+def cmd_soul(a):
+    return _get("/soul", {"project": _proj(a)})
+
+
+def cmd_learn(a):
+    d = _post("/soul/learn", {"principle": a.principle, "project": _proj(a)})
+    return 0 if d is not None else 1
+
+
+def cmd_pref(a):
+    d = _post("/preferences", {"key": a.key, "value": a.value, "project": _proj(a)})
+    if d is None:
+        return 1
+    _print(d)
+    return 0
+
+
+def cmd_dream(a):
+    with _client() as c:
+        r = c.post("/maintenance/dream", params={"project": _proj(a)})
+    if r.status_code != 200:
+        print(f"error {r.status_code}: {r.text}", file=sys.stderr)
+        return 1
+    _print(r.json())
+    return 0
+
+
+def cmd_tick(a):
+    with _client() as c:
+        r = c.post("/maintenance/tick", params={"project": _proj(a)})
+    if r.status_code != 200:
+        print(f"error {r.status_code}: {r.text}", file=sys.stderr)
+        return 1
+    _print(r.json())
+    return 0
+
+
+def cmd_fact(a):
+    d = _post(
+        "/facts",
+        {"subject": a.subject, "value": a.value, "predicate": a.predicate, "project": _proj(a)},
+    )
+    if d is None:
+        return 1
+    _print(d)
+    return 0
+
+
+def cmd_facts(a):
+    params = {"project": _proj(a)}
+    if a.subject:
+        params["subject"] = a.subject
+    return _get("/facts", params)
+
+
+def cmd_doctor(a):
+    return _get("/doctor", {"project": _proj(a)})
+
+
+def cmd_block(a):
+    d = _post("/blocks", {"name": a.name, "text": a.text, "project": _proj(a)})
+    return 0 if d is not None else 1
+
+
+def cmd_archive(a):
+    d = _post("/archive", {"note_id": a.id, "archived": not a.unarchive, "project": _proj(a)})
+    if d is None:
+        return 1
+    _print(d)
+    return 0
+
+
+def cmd_communities(a):
+    return _get("/communities", {"project": _proj(a)})
+
+
+def cmd_metrics(a):
+    return _get("/metrics", {})
+
+
+def cmd_export(a):
+    with _client() as c:
+        r = c.get("/export", params={"project": _proj(a)})
+    if r.status_code != 200:
+        print(f"error {r.status_code}: {r.text}", file=sys.stderr)
+        return 1
+    out = a.out or f"{_proj(a)}-export.json"
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(r.json(), f, indent=2, ensure_ascii=False)
+    print(f"exported to {out}")
+    return 0
+
+
+def cmd_import(a):
+    with open(a.file, encoding="utf-8") as f:
+        bundle = json.load(f)
+    d = _post("/import", {"bundle": bundle, "project": _proj(a)})
+    if d is None:
+        return 1
+    _print(d)
+    return 0
+
+
+def cmd_sleep(a):
+    with _client() as c:
+        r = c.post("/maintenance/sleep", params={"project": _proj(a)})
+    if r.status_code != 200:
+        print(f"error {r.status_code}: {r.text}", file=sys.stderr)
+        return 1
+    _print(r.json())
+    return 0
+
+
+def cmd_eval(a):
+    from brain import evaluate
+
+    with open(a.file, encoding="utf-8") as f:
+        dataset = json.load(f)
+
+    def _search(query, project):
+        d = _post("/search", {"query": query, "limit": a.k, "project": project or _proj(a)})
+        return (d or {}).get("results", [])
+
+    metrics = evaluate.run(_search, dataset, k=a.k)
+    print(
+        f"cases={metrics['cases']}  recall@{metrics['k']}={metrics['recall_at_k']}  "
+        f"mrr={metrics['mrr']}"
+    )
+    return 0
+
+
 def _add_project(p):
     p.add_argument(
         "--project", default=None, help="project name (default: $BRAIN_PROJECT or 'default')"
@@ -226,7 +374,100 @@ def build_parser() -> argparse.ArgumentParser:
     _add_project(s)
     s.set_defaults(func=cmd_reindex)
 
+    s = sub.add_parser("recall", help="multi-layer recall (soul + prefs + memories + procedures)")
+    s.add_argument("query")
+    _add_project(s)
+    s.set_defaults(func=cmd_recall)
+
+    s = sub.add_parser("related", help="memories related to a memory id")
+    s.add_argument("id")
+    _add_project(s)
+    s.set_defaults(func=cmd_related)
+
+    s = sub.add_parser("entities", help="list knowledge-graph entities")
+    _add_project(s)
+    s.set_defaults(func=cmd_entities)
+
+    s = sub.add_parser("soul", help="show the project's SOUL (self-context)")
+    _add_project(s)
+    s.set_defaults(func=cmd_soul)
+
+    s = sub.add_parser("learn", help="append a learned principle to SOUL")
+    s.add_argument("principle")
+    _add_project(s)
+    s.set_defaults(func=cmd_learn)
+
+    s = sub.add_parser("pref", help="set a preference (key value)")
+    s.add_argument("key")
+    s.add_argument("value")
+    _add_project(s)
+    s.set_defaults(func=cmd_pref)
+
+    s = sub.add_parser("dream", help="reflection: merge dupes + synthesize digests")
+    _add_project(s)
+    s.set_defaults(func=cmd_dream)
+
+    s = sub.add_parser("tick", help="heartbeat: decay unused + consolidate")
+    _add_project(s)
+    s.set_defaults(func=cmd_tick)
+
     sub.add_parser("projects", help="list all projects").set_defaults(func=cmd_projects)
+
+    # --- v0.0.1.3 ---
+    s = sub.add_parser("fact", help="record a bi-temporal fact (supersedes prior)")
+    s.add_argument("subject")
+    s.add_argument("value")
+    s.add_argument("--predicate", default="is")
+    _add_project(s)
+    s.set_defaults(func=cmd_fact)
+
+    s = sub.add_parser("facts", help="show current facts (optionally for a subject)")
+    s.add_argument("subject", nargs="?", default="")
+    _add_project(s)
+    s.set_defaults(func=cmd_facts)
+
+    s = sub.add_parser("doctor", help="audit memory quality")
+    _add_project(s)
+    s.set_defaults(func=cmd_doctor)
+
+    s = sub.add_parser("block", help="set a core memory block (name text)")
+    s.add_argument("name")
+    s.add_argument("text")
+    _add_project(s)
+    s.set_defaults(func=cmd_block)
+
+    s = sub.add_parser("archive", help="archive a memory (or --unarchive)")
+    s.add_argument("id")
+    s.add_argument("--unarchive", action="store_true")
+    _add_project(s)
+    s.set_defaults(func=cmd_archive)
+
+    s = sub.add_parser("communities", help="detect entity communities")
+    _add_project(s)
+    s.set_defaults(func=cmd_communities)
+
+    sub.add_parser("metrics", help="usage counters").set_defaults(func=cmd_metrics)
+
+    s = sub.add_parser("export", help="export a project to a JSON bundle")
+    s.add_argument("--out", default="")
+    _add_project(s)
+    s.set_defaults(func=cmd_export)
+
+    s = sub.add_parser("import", help="import a project from a JSON bundle")
+    s.add_argument("file")
+    _add_project(s)
+    s.set_defaults(func=cmd_import)
+
+    s = sub.add_parser("sleep", help="sleep cycle: dream + (optional) archive + audit")
+    _add_project(s)
+    s.set_defaults(func=cmd_sleep)
+
+    s = sub.add_parser("eval", help="run a retrieval eval dataset (recall@k + MRR)")
+    s.add_argument("file")
+    s.add_argument("--k", type=int, default=5)
+    _add_project(s)
+    s.set_defaults(func=cmd_eval)
+
     return p
 
 

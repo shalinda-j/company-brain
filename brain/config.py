@@ -79,10 +79,43 @@ class Config:
     # treat it as a duplicate instead of storing a second copy.
     safe_save: bool = field(default_factory=lambda: _bool("SAFE_SAVE", True))
     dedup_threshold: float = field(default_factory=lambda: _float("DEDUP_THRESHOLD", 0.96))
-    # Search re-ranking: blend semantic score with a memory's usefulness score.
+    # Search re-ranking: blend semantic score with a memory's usefulness/access.
     feedback_weight: float = field(default_factory=lambda: _float("FEEDBACK_WEIGHT", 0.15))
+    access_weight: float = field(default_factory=lambda: _float("ACCESS_WEIGHT", 0.10))
     # How many extra candidates to fetch before re-ranking.
     search_overfetch: int = field(default_factory=lambda: _int("SEARCH_OVERFETCH", 3))
+
+    # --- Multi-layer recall ---------------------------------------------
+    recall_token_budget: int = field(default_factory=lambda: _int("RECALL_TOKEN_BUDGET", 1500))
+
+    # --- Dreaming (reflection) ------------------------------------------
+    # Cluster notes whose similarity is in [relate, dedup) into digest notes.
+    dream_relate_threshold: float = field(
+        default_factory=lambda: _float("DREAM_RELATE_THRESHOLD", 0.6)
+    )
+    dream_max_digests: int = field(default_factory=lambda: _int("DREAM_MAX_DIGESTS", 10))
+
+    # --- Heartbeat + autonomous learning --------------------------------
+    # Background maintenance interval in seconds (0 = disabled; run manually).
+    heartbeat_interval: int = field(default_factory=lambda: _int("HEARTBEAT_INTERVAL", 0))
+    # How much unused memories lose per heartbeat (use-it-or-lose-it).
+    decay_step: int = field(default_factory=lambda: _int("DECAY_STEP", 1))
+
+    # --- Hybrid retrieval -----------------------------------------------
+    hybrid_search: bool = field(default_factory=lambda: _bool("HYBRID_SEARCH", True))
+    rrf_k: int = field(default_factory=lambda: _int("RRF_K", 60))
+
+    # --- Core memory blocks ---------------------------------------------
+    block_char_limit: int = field(default_factory=lambda: _int("BLOCK_CHAR_LIMIT", 2000))
+
+    # --- Safety: secret/PII redaction -----------------------------------
+    # When True, detected secrets are replaced before storing. When False, they
+    # are only reported back to the caller (findings) without modifying content.
+    redact_on_save: bool = field(default_factory=lambda: _bool("REDACT_ON_SAVE", False))
+
+    # --- Sleep cycle ----------------------------------------------------
+    # When True, the heartbeat's sleep cycle archives stale, low-value memories.
+    sleep_archive: bool = field(default_factory=lambda: _bool("SLEEP_ARCHIVE", False))
 
     # --- Optional LLM summarization for /ingest -------------------------
     # OFF by default to preserve the local-only / private posture. When on and

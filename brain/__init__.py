@@ -1,4 +1,5 @@
-"""Company Brain - a private, self-hosted second brain with semantic search,
-projects, feedback re-ranking, dedup/consolidation, and MCP/REST/CLI access."""
+"""Company Brain - a private, self-hosted multi-layer memory system for AI agents:
+semantic + procedural + graph + self (SOUL) + preferences, with multi-layer
+recall, dreaming, a heartbeat, and autonomous (access-based) learning."""
 
-__version__ = "2.0.0"
+__version__ = "0.0.1.3"

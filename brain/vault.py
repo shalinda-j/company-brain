@@ -1,6 +1,7 @@
 """The vault is the source of truth: Obsidian-compatible Markdown with YAML
-frontmatter. v2 adds per-project isolation (vault/<project>/<category>/...) and
-a `usefulness` score used for feedback-based re-ranking.
+frontmatter. v0.0.1.3 adds archived/user/importance on notes; any file or
+directory whose name starts with "_" (e.g. _SOUL.md, _blocks/, _FACTS.json) is
+reserved and never treated as an ordinary memory.
 """
 
 from __future__ import annotations
@@ -14,7 +15,15 @@ import yaml
 from .config import config
 from .security import new_id, safe_join, sanitize_id, slugify
 
-VALID_CATEGORIES = {"conversations", "notes", "tasks", "knowledge", "activity"}
+VALID_CATEGORIES = {
+    "conversations",
+    "notes",
+    "tasks",
+    "knowledge",
+    "activity",
+    "procedure",
+    "self",
+}
 
 
 def sanitize_project(project: str | None) -> str:
@@ -35,7 +44,12 @@ class Note:
     created: str = ""
     updated: str = ""
     links: list[str] = field(default_factory=list)
+    entities: list[str] = field(default_factory=list)
     usefulness: int = 0
+    access_count: int = 0
+    importance: int = 1
+    archived: bool = False
+    user: str = ""
 
     def frontmatter(self) -> dict:
         return {
@@ -46,10 +60,15 @@ class Note:
             "tags": self.tags,
             "source": self.source,
             "agent": self.agent,
+            "user": self.user,
             "created": self.created,
             "updated": self.updated,
             "links": self.links,
+            "entities": self.entities,
             "usefulness": self.usefulness,
+            "access_count": self.access_count,
+            "importance": self.importance,
+            "archived": self.archived,
         }
 
     def to_dict(self) -> dict:
@@ -77,7 +96,7 @@ def _render(note: Note) -> str:
 
 def ensure_project_dirs(project: str) -> None:
     base = project_dir(project)
-    for sub in ("conversations", "notes", "tasks", "knowledge", "activity"):
+    for sub in VALID_CATEGORIES:
         (base / sub).mkdir(parents=True, exist_ok=True)
 
 
@@ -90,8 +109,13 @@ def write_note(
     source: str = "",
     agent: str = "default",
     links: list[str] | None = None,
+    entities: list[str] | None = None,
     note_id: str | None = None,
     usefulness: int = 0,
+    access_count: int = 0,
+    importance: int = 1,
+    archived: bool = False,
+    user: str = "",
 ) -> Note:
     project = sanitize_project(project)
     ensure_project_dirs(project)
@@ -112,7 +136,12 @@ def write_note(
         created=now,
         updated=now,
         links=links or [],
+        entities=entities or [],
         usefulness=usefulness,
+        access_count=access_count,
+        importance=importance,
+        archived=archived,
+        user=user,
     )
     path = _path_for(note)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,10 +167,13 @@ def _parse(path: Path, project: str) -> Note | None:
     lines = body.splitlines()
     if lines and lines[0].startswith("# "):
         body = "\n".join(lines[1:]).lstrip("\n")
-    try:
-        usefulness = int(fm.get("usefulness") or 0)
-    except (TypeError, ValueError):
-        usefulness = 0
+
+    def _int(v, default=0):
+        try:
+            return int(v if v is not None else default)
+        except (TypeError, ValueError):
+            return default
+
     return Note(
         id=str(fm.get("id") or path.stem),
         title=str(fm.get("title") or path.stem),
@@ -151,11 +183,25 @@ def _parse(path: Path, project: str) -> Note | None:
         tags=list(fm.get("tags") or []),
         source=str(fm.get("source") or ""),
         agent=str(fm.get("agent") or "default"),
+        user=str(fm.get("user") or ""),
         created=str(fm.get("created") or ""),
         updated=str(fm.get("updated") or ""),
         links=list(fm.get("links") or []),
-        usefulness=usefulness,
+        entities=list(fm.get("entities") or []),
+        usefulness=_int(fm.get("usefulness")),
+        access_count=_int(fm.get("access_count")),
+        importance=_int(fm.get("importance"), 1),
+        archived=bool(fm.get("archived") or False),
     )
+
+
+def _is_reserved(path: Path, base: Path) -> bool:
+    """True if any path segment below the project root starts with '_'."""
+    try:
+        rel = path.relative_to(base)
+    except ValueError:
+        return True
+    return any(part.startswith("_") for part in rel.parts)
 
 
 def iter_notes(project: str):
@@ -163,6 +209,8 @@ def iter_notes(project: str):
     if not base.exists():
         return
     for path in base.rglob("*.md"):
+        if _is_reserved(path, base):
+            continue
         note = _parse(path, project)
         if note:
             yield note, path
@@ -190,14 +238,15 @@ def find_path(project: str, note_id: str) -> Path | None:
     return None
 
 
-def recent_notes(project: str, n: int = 20) -> list[Note]:
+def recent_notes(project: str, n: int = 20, include_archived: bool = True) -> list[Note]:
     notes = [note for note, _ in iter_notes(project)]
+    if not include_archived:
+        notes = [n for n in notes if not n.archived]
     notes.sort(key=lambda x: x.updated or x.created or "", reverse=True)
     return notes[:n]
 
 
 def update_note(note: Note) -> Note:
-    """Persist changes to an existing note (preserving id/created, bumping updated)."""
     note.updated = _now()
     path = find_path(note.project, note.id)
     if path and path.exists():

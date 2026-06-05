@@ -1,71 +1,117 @@
-# Company Brain — Capabilities
+# Company Brain — Capabilities (v0.0.1.3)
 
-Everything the brain can do, across the three ways to reach it: **Claude Code
-(MCP)**, the **REST API** (curl / any app / n8n), and the **`brain` CLI**.
+A multi-layer memory system reachable three ways: **Claude Code (MCP)**, the
+**REST API**, and the **`brain` CLI**.
 
-## Core operations
+## Operations
 
 | What you can do | MCP tool | REST API | CLI |
 |---|---|---|---|
 | Save a memory | `brain_save` | `POST /save` | `brain save` |
 | Capture conversation text | `brain_ingest` | `POST /ingest` | `brain ingest` |
-| Search by meaning (semantic) | `brain_search` | `POST /search` | `brain search` |
-| Read one memory in full | `brain_get` | `GET /get/{id}` | `brain get` |
-| List newest memories | `brain_recent` | `GET /recent` | `brain recent` |
-| See what each agent did | `brain_activity` | `GET /activity` | `brain activity` |
+| Semantic search | `brain_search` | `POST /search` | `brain search` |
+| **Multi-layer recall** | `brain_recall` | `POST /recall` | `brain recall` |
+| Related memories | `brain_related` | `GET /related/{id}` | `brain related` |
+| List graph entities | `brain_entities` | `GET /entities` | `brain entities` |
+| Entity neighbors / notes | — | `GET /entities/{e}/neighbors`,`/notes` | — |
+| Read SOUL | — | `GET /soul` | `brain soul` |
+| Set SOUL | — | `POST /soul` | — |
+| Teach a principle | `brain_learn` | `POST /soul/learn` | `brain learn` |
+| Remember a preference | `brain_remember_preference` | `POST /preferences` | `brain pref` |
+| Read preferences | — | `GET /preferences` | — |
+| Tag taxonomy (ontology) | — | `GET/POST /ontology` | — |
+| Read one memory | `brain_get` | `GET /get/{id}` | `brain get` |
+| Latest memories | `brain_recent` | `GET /recent` | `brain recent` |
+| Per-agent activity | `brain_activity` | `GET /activity` | `brain activity` |
 | Mark a memory useful | `brain_feedback` | `POST /feedback` | `brain feedback` |
-| List all projects | `brain_projects` | `GET /projects` | `brain projects` |
-| Merge duplicate memories | `brain_consolidate` | `POST /maintenance/consolidate` | `brain consolidate` |
-| Rebuild index from vault | — | `POST /reindex` | `brain reindex` |
+| List projects | `brain_projects` | `GET /projects` | `brain projects` |
+| Consolidate duplicates | `brain_consolidate` | `POST /maintenance/consolidate` | `brain consolidate` |
+| **Dream (reflect)** | `brain_dream` | `POST /maintenance/dream` | `brain dream` |
+| Heartbeat tick | — | `POST /maintenance/tick` | `brain tick` |
+| Rebuild index | — | `POST /reindex` | `brain reindex` |
 | Delete a memory | — | `DELETE /delete/{id}` | — |
-| Stats (per project) | — | `GET /stats` | `brain stats` |
-| Liveness (no auth) | — | `GET /health` | — |
+| **Hybrid search (dense + BM25)** | `brain_search` | `POST /search` (`hybrid`) | `brain search` |
+| **Record a fact (bi-temporal)** | `brain_remember_fact` | `POST /facts` | `brain fact` |
+| Current facts | `brain_facts` | `GET /facts` | `brain facts` |
+| Fact history | — | `GET /facts/{subject}/history` | — |
+| **Set a memory block** | `brain_set_block` | `POST /blocks` | `brain block` |
+| Read memory blocks | — | `GET /blocks`, `/block/{name}` | — |
+| Entity alias (resolution) | — | `POST /alias` | — |
+| **Communities** | — | `GET /communities` | `brain communities` |
+| Multi-hop traversal | — | `GET /entities/{e}/multihop` | — |
+| Archive / unarchive | — | `POST /archive` | `brain archive` |
+| **Doctor (audit)** | `brain_doctor` | `GET /doctor` | `brain doctor` |
+| Export project | — | `GET /export` | `brain export` |
+| Import project | — | `POST /import` | `brain import` |
+| Ingest a file | — | — | `brain ingest-file`* |
+| **Sleep cycle** | — | `POST /maintenance/sleep` | `brain sleep` |
+| Retrieval eval (recall@k, MRR) | — | — | `brain eval` |
+| Usage metrics | — | `GET /metrics` | `brain metrics` |
+| Stats | — | `GET /stats` | `brain stats` |
+| Liveness | — | `GET /health` | — |
 
-**Save fields**: `content` (required), `title`, `category`, `tags`, `source`,
-`project`, `allow_duplicate`.
-**Categories**: `conversations`, `notes`, `tasks`, `knowledge`, `activity`.
-**Search fields**: `query`, `limit` (1–50), `category`, `agent`, `tag`, `project`.
+**Categories**: `conversations`, `notes`, `tasks`, `knowledge`, `activity`,
+`procedure`, `self`. Entities come from `[[wikilinks]]`, `#hashtags`, or the
+explicit `entities` field on save.
 
-## Capabilities (v2)
+## Memory layers (v3)
 
-| Capability | What it means |
+| Layer | What it is |
 |---|---|
-| **Projects** | Each project (`avedit`, `weddinghub`, …) is fully isolated: its own vault folder and vector collection. Searching one project never returns another's memories. |
-| Shared multi-agent memory | Claude Code, Cursor, etc. read/write the same brain; every entry is tagged by agent. |
-| Cross-session / cross-machine | Connect from anywhere with URL + key; nothing heavy stored locally. |
-| Semantic, multilingual recall | Find by meaning in Sinhala + English + code. |
-| **Safe-learning (dedup on save)** | A near-identical memory is recognized, not stored twice. Override with `allow_duplicate`. |
-| **Feedback re-ranking** | Mark memories useful; useful memories rank higher in future searches. |
-| **Self-optimization (consolidation)** | Periodically merge near-duplicate memories into one. |
-| **Conversation ingest** | Capture chat text as memories; optional off-by-default LLM summarization. |
-| Agent coordination | `brain_activity` shows what other agents already did. |
-| Auto search-logging | Every query is saved as an `activity` memory. |
-| Obsidian-browsable | The vault is plain Markdown per project — open in Obsidian, version with git. |
-| Private & self-hosted | Embeddings run locally on CPU; nothing leaves your droplet. |
-| Resilient | A vector-dimension mismatch (after switching models) auto-rebuilds and re-indexes. |
+| **Semantic** | Vector search over your notes (multilingual, local CPU). |
+| **Procedural** | `procedure` notes (how-tos), prioritized for "how to" queries. |
+| **Knowledge graph** | Entities + co-occurrence relationships; query neighbors and notes. |
+| **Document relationships** | Notes related by shared entities + similarity. |
+| **Sense of self (SOUL)** | Per-project identity + learned principles, always recalled. |
+| **Preferential** | Per-project key/value preferences, always recalled. |
+| **Ontology** | Tag taxonomy that expands tag filters to descendant tags. |
 
-## Auto-capturing conversations
+## Intelligence behaviors
 
-The brain is pull-based: an AI calls `brain_ingest` / `brain_save` when it
-decides to. To capture automatically, either:
+| Behavior | What it does |
+|---|---|
+| **Multi-layer recall** | One call assembles SOUL + preferences + memories + procedures + entities into a token-budgeted bundle. |
+| **Dynamic priority weights** | "How-to" queries push procedures above memories; otherwise memories lead. |
+| **Safe-learning (dedup)** | Near-identical memories aren't stored twice. |
+| **Autonomous learning** | Accessing a memory raises its usefulness; unused memories decay over heartbeats. |
+| **Dreaming** | Offline reflection: merge duplicates + synthesize digest notes from clusters. |
+| **Heartbeat** | Optional background loop running decay + consolidation. |
 
-1. **Instruct the agent** — in Claude Code project instructions:
-   > At the end of each task, call `brain_ingest` with a short summary of what
-   > was decided or done, using the right `project`.
-2. **Pipe from n8n** — `POST /ingest` with conversation logs from a workflow.
+> These are heuristic, local, and LLM-optional — a working foundation, not an
+> autonomous AGI.
 
-## Examples
+## Typical agent loop
 
-```bash
-export BRAIN_URL=https://your-brain BRAIN_API_KEY=KEY BRAIN_VERIFY_TLS=false
-
-brain save "Use Qdrant + FastAPI" --project avedit --category knowledge --tag infra
-brain search "what stack did we choose" --project avedit
-brain ingest "We agreed to ship the MVP next week and use PayHere." --project weddinghub
-brain feedback 20260604-120909-abc123 --project avedit
-brain consolidate --project avedit
-brain projects
+```
+Start of task →  brain_recall("the task")        # load SOUL + prefs + relevant context
+During work   →  brain_search / brain_related    # pull specifics, follow relationships
+Learned X     →  brain_learn("principle ...")     # durable self-knowledge
+User prefs    →  brain_remember_preference(k, v)
+End of task   →  brain_ingest("summary ...")      # remember what happened
+Periodically  →  brain_dream()                    # reflect & tidy up
 ```
 
-In Claude Code, just talk: *"save this to my avedit brain…"*, *"search my
-weddinghub brain for payments"*, *"what did the cursor agent do in avedit?"*.
+
+## What's new in v0.0.1.3
+
+- **Hybrid retrieval**: dense vectors + BM25 keyword search, fused with RRF, then
+  importance/usefulness-aware final ranking. Exact terms and rare codes surface
+  reliably; meaning still matches loosely. `HYBRID_SEARCH=true`, `RRF_K=60`.
+- **Bi-temporal facts**: facts that change over time. A new value for a subject
+  supersedes (invalidates) the old one but keeps it as history — never deleted.
+- **Secret / PII redaction**: saves are scanned for keys, tokens, private keys,
+  and emails; reported in `pii_findings`, optionally scrubbed (`REDACT_ON_SAVE`).
+- **Core memory blocks**: named, size-limited, editable context (e.g. `human`),
+  always included in recall next to the SOUL.
+- **Entity resolution**: alias map + normalization merge surface variants.
+- **Communities + multi-hop**: cluster the entity graph and traverse it.
+- **Importance, archival tiers, /doctor audit, export/import, file ingestion,
+  per-user scoping, sleep cycle, eval harness, and metrics.**
+
+### Optional (LLM) hooks — off by default
+LLM triple extraction, LLM community summaries, and an LLM sleep-time reasoning
+agent are documented hooks. Everything shipped here is local and deterministic.
+For **encryption at rest**, use OS-level disk encryption (LUKS) so the vault
+stays human-readable and git/Obsidian-friendly. A web dashboard is next.
+
+\* `ingest-file` is CLI/in-process; there is also `ingest_dir` for folders.

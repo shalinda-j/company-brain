@@ -1,0 +1,12 @@
+[
+  {
+    "query": "how do we deploy the brain on a server",
+    "expected": ["REPLACE_WITH_NOTE_ID_1"],
+    "project": "default"
+  },
+  {
+    "query": "what does the avedit pipeline do",
+    "expected": ["REPLACE_WITH_NOTE_ID_2"],
+    "project": "default"
+  }
+]

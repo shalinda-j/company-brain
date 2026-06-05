@@ -207,6 +207,136 @@ def brain_consolidate(project: str = "") -> str:
     )
 
 
+@mcp.tool()
+def brain_recall(query: str, project: str = "") -> str:
+    """Multi-layer recall: pulls the agent's SOUL, preferences, the most relevant
+    memories, procedures, and related entities into one token-budgeted context
+    bundle. Use this at the START of a task to load everything relevant at once."""
+    payload = {"query": query, "project": _proj(project)}
+    with _client() as c:
+        r = c.post("/recall", json=payload)
+        r.raise_for_status()
+        d = r.json()
+    return d.get("context") or "No context found."
+
+
+@mcp.tool()
+def brain_related(note_id: str, project: str = "") -> str:
+    """Find memories related to a given memory (by shared entities + similarity)."""
+    with _client() as c:
+        r = c.get(f"/related/{note_id}", params={"project": _proj(project)})
+        r.raise_for_status()
+        items = r.json().get("related", [])
+    if not items:
+        return "No related memories."
+    return "\n".join(
+        f"- {i.get('title')} (id={i.get('note_id')}, {i.get('reason')})" for i in items
+    )
+
+
+@mcp.tool()
+def brain_entities(project: str = "") -> str:
+    """List the knowledge-graph entities in a project (people, topics, things)
+    with how often each is mentioned."""
+    with _client() as c:
+        r = c.get("/entities", params={"project": _proj(project)})
+        r.raise_for_status()
+        items = r.json().get("entities", [])
+    if not items:
+        return "No entities yet. Mention them with [[wikilinks]] or #hashtags."
+    return "\n".join(f"- {e['entity']} ({e['mentions']})" for e in items[:40])
+
+
+@mcp.tool()
+def brain_learn(principle: str, project: str = "") -> str:
+    """Teach the brain a durable principle about how to work — it's appended to the
+    project's SOUL and surfaced in every future recall."""
+    with _client() as c:
+        r = c.post("/soul/learn", json={"principle": principle, "project": _proj(project)})
+        r.raise_for_status()
+    return "Learned. It will appear in future recalls."
+
+
+@mcp.tool()
+def brain_remember_preference(key: str, value: str, project: str = "") -> str:
+    """Store a user/agent preference (key + value). Preferences are surfaced in
+    every recall."""
+    with _client() as c:
+        r = c.post("/preferences", json={"key": key, "value": value, "project": _proj(project)})
+        r.raise_for_status()
+    return f"Saved preference {key} = {value}."
+
+
+@mcp.tool()
+def brain_dream(project: str = "") -> str:
+    """Run a reflection pass: merge duplicates and synthesize digest notes from
+    clusters of related memories (self-optimization)."""
+    with _client() as c:
+        r = c.post("/maintenance/dream", params={"project": _proj(project)})
+        r.raise_for_status()
+        d = r.json()
+    return (
+        f"Dreamed on '{d['project']}': merged {d['consolidated']} duplicates, "
+        f"created {d['digests_created']} digests."
+    )
+
+
+@mcp.tool()
+def brain_remember_fact(subject: str, value: str, predicate: str = "is", project: str = "") -> str:
+    """Record a fact about a subject. If a fact for the same subject already exists,
+    it's superseded (the old one is kept as history). Use for facts that change —
+    status, plan, current value, etc."""
+    payload = {
+        "subject": subject,
+        "value": value,
+        "predicate": predicate,
+        "project": _proj(project),
+    }
+    with _client() as c:
+        r = c.post("/facts", json=payload)
+        r.raise_for_status()
+        d = r.json()
+    inv = len(d.get("invalidated", []))
+    extra = f" (superseded {inv} prior)" if inv else ""
+    return f"Recorded: {subject} {predicate} {value}.{extra}"
+
+
+@mcp.tool()
+def brain_facts(subject: str = "", project: str = "") -> str:
+    """Get current (non-superseded) facts, optionally for one subject."""
+    params = {"project": _proj(project)}
+    if subject:
+        params["subject"] = subject
+    with _client() as c:
+        r = c.get("/facts", params=params)
+        r.raise_for_status()
+        items = r.json().get("facts", [])
+    if not items:
+        return "No facts."
+    return "\n".join(f"- {f['subject']} {f['predicate']} {f['value']}" for f in items)
+
+
+@mcp.tool()
+def brain_set_block(name: str, text: str, project: str = "") -> str:
+    """Write a core memory block (e.g. 'human' = facts about the user). Blocks are
+    size-limited and always included in recall."""
+    with _client() as c:
+        r = c.post("/blocks", json={"name": name, "text": text, "project": _proj(project)})
+        r.raise_for_status()
+    return f"Block '{name}' saved."
+
+
+@mcp.tool()
+def brain_doctor(project: str = "") -> str:
+    """Audit memory quality: duplicates, stale items, orphan entities, oversized
+    blocks, possible secrets/PII, and contradictory facts."""
+    with _client() as c:
+        r = c.get("/doctor", params={"project": _proj(project)})
+        r.raise_for_status()
+        s = r.json().get("summary", {})
+    return "Memory health — " + ", ".join(f"{k}: {v}" for k, v in s.items())
+
+
 def main() -> None:
     mcp.run()
 

@@ -21,11 +21,22 @@ memory.
   of re-deriving.
 - **Projects** — isolate memories per project (`avedit`, `weddinghub`, …); each
   has its own vault folder and vector collection.
-- **Self-optimizing & safe** — near-duplicate detection on save, feedback-based
-  re-ranking, and one-command consolidation of duplicate memories.
+- **Multi-layer memory** — semantic notes, procedures, a knowledge graph
+  (entities + relationships, **communities**, **multi-hop**), **bi-temporal
+  facts**, a sense-of-self **SOUL** + **core memory blocks**, and preferences —
+  pulled together by one **`recall`** call with dynamic priority weights and a
+  token budget.
+- **Hybrid retrieval** — dense (vector) + **BM25** keyword search fused with RRF,
+  so exact terms and rare codes surface alongside semantic matches.
+- **Bi-temporal facts** — facts that change over time: a new value supersedes the
+  old one but keeps full history (nothing is deleted).
+- **Self-optimizing & safe** — near-duplicate detection, **secret/PII redaction**
+  on save, feedback + access + **importance**-based ranking, **archival tiers**,
+  a **`/doctor`** memory audit, **dreaming** + a **sleep cycle**, an optional
+  **heartbeat**, **export/import**, and an **eval harness** (recall@k, MRR).
 
-> See **[CAPABILITIES.md](CAPABILITIES.md)** for the full list of everything the
-> brain can do across MCP, REST, and CLI.
+> See **[CAPABILITIES.md](CAPABILITIES.md)** for everything the brain can do
+> across MCP, REST, and CLI.
 
 ---
 
@@ -133,15 +144,21 @@ Set `BRAIN_PROJECT` to scope a client to one project, and
 
 | Tool | What it does |
 |------|--------------|
+| `brain_recall` | Multi-layer recall — SOUL + prefs + memories + procedures + entities |
 | `brain_save` | Remember something (dedup-protected) |
 | `brain_ingest` | Capture conversation text as a memory |
-| `brain_search` | Semantic search (ranked by relevance + usefulness) |
-| `brain_get` | Read one memory in full by id |
-| `brain_recent` | List the latest memories |
-| `brain_activity` | See what each agent has been doing |
+| `brain_search` | Semantic search (relevance + usefulness + access) |
+| `brain_related` | Memories related by shared entities + similarity |
+| `brain_entities` | List knowledge-graph entities |
+| `brain_learn` | Append a durable principle to the project's SOUL |
+| `brain_remember_preference` | Store a user/agent preference |
+| `brain_get` · `brain_recent` · `brain_activity` | Read / list / audit memories |
 | `brain_feedback` | Mark a memory useful → ranks higher later |
-| `brain_projects` | List all projects and their counts |
-| `brain_consolidate` | Merge near-duplicate memories in a project |
+| `brain_projects` | List projects and their counts |
+| `brain_consolidate` · `brain_dream` | Tidy duplicates / reflect & synthesize |
+| `brain_remember_fact` · `brain_facts` | Record / read bi-temporal facts (auto-supersede) |
+| `brain_set_block` | Write a core memory block (e.g. `human`), always in recall |
+| `brain_doctor` | Audit memory quality (dupes, stale, PII, contradictions) |
 
 All tools accept a `project` argument. See [CAPABILITIES.md](CAPABILITIES.md).
 
