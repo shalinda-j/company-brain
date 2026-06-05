@@ -17,7 +17,19 @@ import math
 import threading
 from collections import Counter
 
-from . import blocks, facts, graph, hybrid, ontology, preferences, redact, resolve, soul, vault
+from . import (
+    blocks,
+    facts,
+    graph,
+    hybrid,
+    ontology,
+    preferences,
+    redact,
+    resolve,
+    session,
+    soul,
+    vault,
+)
 from .chunking import chunk_text
 from .config import config
 from .embeddings import get_embedder
@@ -149,6 +161,7 @@ class Brain:
         project: str | None = None,
         user: str = "",
         importance: int | None = None,
+        pinned: bool = False,
         allow_duplicate: bool = False,
     ) -> dict:
         project = vault.sanitize_project(project)
@@ -191,6 +204,7 @@ class Brain:
                 entities=ents,
                 user=user,
                 importance=imp,
+                pinned=pinned,
             )
             n_chunks = self._index_note(store, note)
         self._metrics["save"] += 1
@@ -284,6 +298,7 @@ class Brain:
         project: str | None = None,
         token_budget: int | None = None,
         user: str | None = None,
+        agent: str | None = None,
         searched_by: str = "default",
     ) -> dict:
         project = vault.sanitize_project(project)
@@ -295,9 +310,10 @@ class Brain:
             query, limit=6, project=project, user=user, searched_by=searched_by, log=False
         )
         procedures = self.search(query, limit=4, category="procedure", project=project, log=False)
-        soul_text = soul.get_soul(project).strip()
-        core_blocks = blocks.list_blocks(project)
-        prefs = preferences.all_prefs(project)
+        soul_text = soul.merged_soul(project, agent).strip()
+        core_blocks = blocks.list_blocks(project, agent)
+        prefs = preferences.merged_prefs(project, agent)
+        directive_notes = self.directives(project)
 
         ents = graph.entity_list(project)
         ql_tokens = set(q.replace("?", " ").split())
@@ -307,32 +323,53 @@ class Brain:
             rel_facts.extend(facts.current_facts(project, subject=e["entity"]))
 
         wants_procedure = any(cue in q for cue in _PROCEDURE_CUES)
-        order = ["soul", "blocks", "preferences", "facts", "memories", "procedures", "entities"]
+        order = [
+            "soul",
+            "directives",
+            "blocks",
+            "preferences",
+            "facts",
+            "memories",
+            "procedures",
+            "entities",
+        ]
         if wants_procedure:
-            order = ["soul", "blocks", "preferences", "procedures", "facts", "memories", "entities"]
+            order = [
+                "soul",
+                "directives",
+                "blocks",
+                "preferences",
+                "procedures",
+                "facts",
+                "memories",
+                "entities",
+            ]
+        # Always-applied, high-value layers are protected from being dropped.
+        guaranteed = {"soul", "directives", "facts"}
 
         char_budget = budget * 4
         parts: list[str] = []
         used = 0
+        included: list[str] = []
+        dropped: list[str] = []
 
-        def add(label: str, text: str):
-            nonlocal used
-            block = f"## {label}\n{text}\n"
-            if text and used + len(block) <= char_budget:
-                parts.append(block)
-                used += len(block)
+        def _fact_line(f: dict) -> str:
+            who = f.get("agent", "default")
+            suffix = f" [{who}]" if who and who != "default" else ""
+            return f"- {f['subject']} {f['predicate']} {f['value']}{suffix}"
 
         sections = {
             "soul": ("SOUL", soul_text[:800] if soul_text else ""),
+            "directives": (
+                "Directives (always apply)",
+                "\n".join(f"- {d['title']}: {d['text'][:160]}" for d in directive_notes),
+            ),
             "blocks": (
                 "Memory blocks",
                 "\n".join(f"### {k}\n{v[:400]}" for k, v in core_blocks.items()),
             ),
             "preferences": ("Preferences", "\n".join(f"- {k}: {v}" for k, v in prefs.items())),
-            "facts": (
-                "Current facts",
-                "\n".join(f"- {f['subject']} {f['predicate']} {f['value']}" for f in rel_facts),
-            ),
+            "facts": ("Current facts", "\n".join(_fact_line(f) for f in rel_facts)),
             "memories": (
                 "Relevant memories",
                 "\n".join(
@@ -348,13 +385,24 @@ class Brain:
         }
         for key in order:
             label, text = sections[key]
-            add(label, text)
+            if not text:
+                continue
+            block = f"## {label}\n{text}\n"
+            if key in guaranteed or used + len(block) <= char_budget:
+                parts.append(block)
+                used += len(block)
+                included.append(key)
+            else:
+                dropped.append(key)
 
         return {
             "project": project,
             "query": query,
             "priority_order": order,
+            "included_layers": included,
+            "dropped_layers": dropped,
             "soul": soul_text,
+            "directives": directive_notes,
             "blocks": core_blocks,
             "preferences": prefs,
             "facts": rel_facts,
@@ -406,6 +454,88 @@ class Brain:
     def communities(self, project: str | None = None) -> list[dict]:
         return graph.communities(vault.sanitize_project(project))
 
+    def graph_data(
+        self, project: str | None = None, mode: str = "entities", limit: int = 400
+    ) -> dict:
+        """Nodes + edges for a force-directed dashboard graph.
+
+        mode="entities": knowledge graph (entities as nodes, co-occurrence edges,
+        colored by community). mode="notes": Obsidian-style (notes as nodes, edges
+        from explicit links + shared entities)."""
+        project = vault.sanitize_project(project)
+        if mode == "notes":
+            notes = [
+                n
+                for n, _ in vault.iter_notes(project)
+                if not n.archived and n.category != "activity"
+            ][:limit]
+            ids = {n.id for n in notes}
+            nodes = [
+                {
+                    "id": n.id,
+                    "label": n.title,
+                    "group": n.category,
+                    "val": 1 + max(int(n.importance or 1), 1) + min(int(n.access_count or 0), 5),
+                    "category": n.category,
+                    "project": project,
+                }
+                for n in notes
+            ]
+            edge_set: set[frozenset] = set()
+            edges: list[dict] = []
+
+            def _add_edge(a: str, b: str, kind: str):
+                if a == b or a not in ids or b not in ids:
+                    return
+                key = frozenset({a, b})
+                if key in edge_set:
+                    return
+                edge_set.add(key)
+                edges.append({"source": a, "target": b, "kind": kind})
+
+            for n in notes:
+                for link in n.links or []:
+                    _add_edge(n.id, link, "link")
+            # bridge notes that share an entity (capped per entity)
+            by_entity: dict[str, list[str]] = {}
+            for n in notes:
+                for e in n.entities or []:
+                    by_entity.setdefault(resolve.canonical(e).lower(), []).append(n.id)
+            for members in by_entity.values():
+                members = members[:8]
+                for i in range(len(members)):
+                    for j in range(i + 1, len(members)):
+                        _add_edge(members[i], members[j], "shared-entity")
+                        if len(edges) > limit * 6:
+                            break
+            return {"mode": "notes", "project": project, "nodes": nodes, "edges": edges}
+
+        # entities mode
+        g = graph.build_graph(project)
+        comm_of: dict[str, int] = {}
+        for c in graph.communities(project):
+            for m in c["members"]:
+                comm_of[m] = c["id"]
+        entities = sorted(g["entities"].items(), key=lambda x: x[1], reverse=True)[:limit]
+        keep = {e for e, _ in entities}
+        nodes = [
+            {
+                "id": e,
+                "label": e,
+                "group": comm_of.get(e, 0),
+                "val": 2 + min(c, 12),
+                "mentions": c,
+                "project": project,
+            }
+            for e, c in entities
+        ]
+        edges = []
+        for key, w in g["edges"].items():
+            a, b = key.split("|||")
+            if a in keep and b in keep:
+                edges.append({"source": a, "target": b, "weight": w, "kind": "co-occurrence"})
+        return {"mode": "entities", "project": project, "nodes": nodes, "edges": edges}
+
     def entity_notes(self, entity: str, project: str | None = None) -> list[dict]:
         project = vault.sanitize_project(project)
         out = []
@@ -440,32 +570,40 @@ class Brain:
         return facts.history(vault.sanitize_project(project), subject)
 
     # -- self / blocks / preferences / ontology -------------------------
-    def get_soul(self, project: str | None = None) -> str:
-        return soul.get_soul(vault.sanitize_project(project))
+    def get_soul(self, project: str | None = None, agent: str | None = None) -> str:
+        return soul.get_soul(vault.sanitize_project(project), agent)
 
-    def set_soul(self, text: str, project: str | None = None) -> str:
-        return soul.set_soul(vault.sanitize_project(project), text)
+    def set_soul(self, text: str, project: str | None = None, agent: str | None = None) -> str:
+        return soul.set_soul(vault.sanitize_project(project), text, agent)
 
-    def learn_principle(self, principle: str, project: str | None = None) -> str:
-        return soul.append_principle(vault.sanitize_project(project), principle)
+    def learn_principle(
+        self, principle: str, project: str | None = None, agent: str | None = None
+    ) -> str:
+        return soul.append_principle(vault.sanitize_project(project), principle, agent)
 
-    def get_block(self, name: str, project: str | None = None) -> str:
-        return blocks.get_block(vault.sanitize_project(project), name)
+    def get_block(self, name: str, project: str | None = None, agent: str | None = None) -> str:
+        return blocks.get_block(vault.sanitize_project(project), name, agent)
 
-    def set_block(self, name: str, text: str, project: str | None = None) -> str:
-        return blocks.set_block(vault.sanitize_project(project), name, text)
+    def set_block(
+        self, name: str, text: str, project: str | None = None, agent: str | None = None
+    ) -> str:
+        return blocks.set_block(vault.sanitize_project(project), name, text, agent)
 
-    def append_block(self, name: str, text: str, project: str | None = None) -> str:
-        return blocks.append_block(vault.sanitize_project(project), name, text)
+    def append_block(
+        self, name: str, text: str, project: str | None = None, agent: str | None = None
+    ) -> str:
+        return blocks.append_block(vault.sanitize_project(project), name, text, agent)
 
-    def list_blocks(self, project: str | None = None) -> dict:
-        return blocks.list_blocks(vault.sanitize_project(project))
+    def list_blocks(self, project: str | None = None, agent: str | None = None) -> dict:
+        return blocks.list_blocks(vault.sanitize_project(project), agent)
 
-    def get_preferences(self, project: str | None = None) -> dict:
-        return preferences.all_prefs(vault.sanitize_project(project))
+    def get_preferences(self, project: str | None = None, agent: str | None = None) -> dict:
+        return preferences.all_prefs(vault.sanitize_project(project), agent)
 
-    def set_preference(self, key: str, value: str, project: str | None = None) -> dict:
-        return preferences.set_pref(vault.sanitize_project(project), key, value)
+    def set_preference(
+        self, key: str, value: str, project: str | None = None, agent: str | None = None
+    ) -> dict:
+        return preferences.set_pref(vault.sanitize_project(project), key, value, agent)
 
     def set_ontology(self, tag: str, parent: str) -> dict:
         return ontology.set_parent(tag, parent)
@@ -542,7 +680,49 @@ class Brain:
             self._index_note(self._get_store(project), note)
         return {"id": note.id, "archived": note.archived}
 
-    # -- ingest ----------------------------------------------------------
+    # -- directives / pinned ("always apply") ---------------------------
+    def directives(self, project: str | None = None) -> list[dict]:
+        project = vault.sanitize_project(project)
+        out = []
+        for note, _ in vault.iter_notes(project):
+            if note.pinned and not note.archived:
+                out.append(
+                    {
+                        "id": note.id,
+                        "title": note.title,
+                        "text": (note.content or "")[:400],
+                        "category": note.category,
+                        "agent": note.agent,
+                    }
+                )
+        out.sort(key=lambda d: d["id"], reverse=True)
+        return out
+
+    def set_pinned(self, note_id: str, pinned: bool, project: str | None = None) -> dict | None:
+        project = vault.sanitize_project(project)
+        with self._lock:
+            note = vault.find_note(project, note_id)
+            if not note:
+                return None
+            note.pinned = pinned
+            vault.update_note(note)
+            self._index_note(self._get_store(project), note)
+        return {"id": note.id, "pinned": note.pinned}
+
+    def add_directive(self, text: str, project: str | None = None, agent: str = "default") -> dict:
+        """Save an always-applied directive (a pinned note surfaced in every recall)."""
+        return self.save(
+            content=text,
+            title=f"directive: {text[:50]}",
+            category="directive",
+            tags=["directive"],
+            agent=agent,
+            project=project,
+            importance=5,
+            pinned=True,
+            allow_duplicate=True,
+        )
+
     def ingest(
         self,
         text: str,
@@ -806,7 +986,7 @@ class Brain:
     def export(self, project: str | None = None) -> dict:
         project = vault.sanitize_project(project)
         return {
-            "version": "0.0.1.3",
+            "version": "0.0.1.6",
             "project": project,
             "notes": [n.to_dict() for n, _ in vault.iter_notes(project)],
             "soul": soul.get_soul(project),
@@ -836,6 +1016,7 @@ class Brain:
                     access_count=int(nd.get("access_count") or 0),
                     importance=int(nd.get("importance") or 1),
                     archived=bool(nd.get("archived") or False),
+                    pinned=bool(nd.get("pinned") or False),
                     user=nd.get("user", ""),
                 )
                 n += 1
@@ -880,6 +1061,36 @@ class Brain:
                 }
             )
         return out
+
+    # -- real-time session / checkpoint layer ---------------------------
+    def checkpoint(
+        self,
+        note: str,
+        session_id: str = "default",
+        agent: str = "default",
+        files: list[str] | None = None,
+        git_ref: str = "",
+        next_step: str = "",
+        status: str = "working",
+        project: str | None = None,
+    ) -> dict:
+        self._metrics["checkpoint"] += 1
+        return session.add_checkpoint(
+            vault.sanitize_project(project),
+            note=note,
+            session=session_id,
+            agent=agent,
+            files=files,
+            git_ref=git_ref,
+            next_step=next_step,
+            status=status,
+        )
+
+    def resume(self, session_id: str | None = None, project: str | None = None, n: int = 5) -> dict:
+        return session.resume(vault.sanitize_project(project), session=session_id, n=n)
+
+    def sessions(self, project: str | None = None) -> list[dict]:
+        return session.list_sessions(vault.sanitize_project(project))
 
     def metrics(self) -> dict:
         return dict(self._metrics)

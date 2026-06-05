@@ -66,6 +66,7 @@ def add_fact(
                 f.get("invalidated_at") is None
                 and _norm(f.get("subject")) == _norm(subject)
                 and _norm(f.get("predicate")) == _norm(predicate)
+                and _norm(f.get("agent")) == _norm(agent)
             ):
                 f["invalidated_at"] = now
                 f["valid_to"] = now
@@ -88,11 +89,13 @@ def add_fact(
     return fact
 
 
-def current_facts(project: str, subject: str | None = None) -> list[dict]:
+def current_facts(project: str, subject: str | None = None, agent: str | None = None) -> list[dict]:
     facts = _load(vault.sanitize_project(project))
     out = [f for f in facts if f.get("invalidated_at") is None]
     if subject:
         out = [f for f in out if _norm(f.get("subject")) == _norm(subject)]
+    if agent is not None:
+        out = [f for f in out if _norm(f.get("agent")) == _norm(agent)]
     return out
 
 
@@ -114,7 +117,12 @@ def contradictions(project: str) -> list[dict]:
     for f in facts:
         by_key.setdefault((_norm(f["subject"]), _norm(f["predicate"])), []).append(f)
     return [
-        {"subject": k[0], "predicate": k[1], "values": [x["value"] for x in v]}
+        {
+            "subject": k[0],
+            "predicate": k[1],
+            "values": [x["value"] for x in v],
+            "agents": [x.get("agent", "default") for x in v],
+        }
         for k, v in by_key.items()
         if len(v) > 1
     ]

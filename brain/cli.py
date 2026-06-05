@@ -181,12 +181,27 @@ def cmd_soul(a):
 
 
 def cmd_learn(a):
-    d = _post("/soul/learn", {"principle": a.principle, "project": _proj(a)})
+    d = _post(
+        "/soul/learn",
+        {
+            "principle": a.principle,
+            "project": _proj(a),
+            "agent_scope": getattr(a, "personal", False),
+        },
+    )
     return 0 if d is not None else 1
 
 
 def cmd_pref(a):
-    d = _post("/preferences", {"key": a.key, "value": a.value, "project": _proj(a)})
+    d = _post(
+        "/preferences",
+        {
+            "key": a.key,
+            "value": a.value,
+            "project": _proj(a),
+            "agent_scope": getattr(a, "personal", False),
+        },
+    )
     if d is None:
         return 1
     _print(d)
@@ -307,6 +322,51 @@ def cmd_eval(a):
     return 0
 
 
+def cmd_directive(a):
+    d = _post("/directives", {"text": a.text, "project": _proj(a)})
+    if d is None:
+        return 1
+    print(f"directive pinned id={d['id']}")
+    return 0
+
+
+def cmd_pin(a):
+    d = _post("/pin", {"note_id": a.id, "pinned": not a.off, "project": _proj(a)})
+    if d is None:
+        return 1
+    _print(d)
+    return 0
+
+
+def cmd_checkpoint(a):
+    d = _post(
+        "/checkpoint",
+        {
+            "note": a.note,
+            "session": a.session,
+            "files": (a.files.split(",") if a.files else []),
+            "git_ref": a.git_ref or "",
+            "next": a.next or "",
+            "project": _proj(a),
+        },
+    )
+    if d is None:
+        return 1
+    print(f"checkpoint saved (session {d['session']})")
+    return 0
+
+
+def cmd_resume(a):
+    params = {"project": _proj(a)}
+    if a.session:
+        params["session"] = a.session
+    return _get("/resume", params)
+
+
+def cmd_sessions(a):
+    return _get("/sessions", {"project": _proj(a)})
+
+
 def _add_project(p):
     p.add_argument(
         "--project", default=None, help="project name (default: $BRAIN_PROJECT or 'default')"
@@ -394,12 +454,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("learn", help="append a learned principle to SOUL")
     s.add_argument("principle")
+    s.add_argument("--personal", action="store_true", help="write to this agent's overlay only")
     _add_project(s)
     s.set_defaults(func=cmd_learn)
 
     s = sub.add_parser("pref", help="set a preference (key value)")
     s.add_argument("key")
     s.add_argument("value")
+    s.add_argument("--personal", action="store_true", help="write to this agent's overlay only")
     _add_project(s)
     s.set_defaults(func=cmd_pref)
 
@@ -467,6 +529,35 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--k", type=int, default=5)
     _add_project(s)
     s.set_defaults(func=cmd_eval)
+
+    s = sub.add_parser("directive", help="pin an always-applied directive")
+    s.add_argument("text")
+    _add_project(s)
+    s.set_defaults(func=cmd_directive)
+
+    s = sub.add_parser("pin", help="pin/unpin a memory as an always-applied directive")
+    s.add_argument("id")
+    s.add_argument("--off", action="store_true", help="unpin instead")
+    _add_project(s)
+    s.set_defaults(func=cmd_pin)
+
+    s = sub.add_parser("checkpoint", help="record a real-time crash-recovery checkpoint")
+    s.add_argument("note")
+    s.add_argument("--session", default="default")
+    s.add_argument("--files", default="", help="comma-separated file paths")
+    s.add_argument("--git-ref", dest="git_ref", default="")
+    s.add_argument("--next", default="")
+    _add_project(s)
+    s.set_defaults(func=cmd_checkpoint)
+
+    s = sub.add_parser("resume", help="recover where you left off (latest checkpoints)")
+    s.add_argument("--session", default="")
+    _add_project(s)
+    s.set_defaults(func=cmd_resume)
+
+    s = sub.add_parser("sessions", help="list session journals")
+    _add_project(s)
+    s.set_defaults(func=cmd_sessions)
 
     return p
 

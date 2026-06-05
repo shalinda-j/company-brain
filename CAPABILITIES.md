@@ -1,4 +1,4 @@
-# Company Brain — Capabilities (v0.0.1.3)
+# Company Brain — Capabilities (v0.0.1.6)
 
 A multi-layer memory system reachable three ways: **Claude Code (MCP)**, the
 **REST API**, and the **`brain` CLI**.
@@ -47,6 +47,13 @@ A multi-layer memory system reachable three ways: **Claude Code (MCP)**, the
 | **Sleep cycle** | — | `POST /maintenance/sleep` | `brain sleep` |
 | Retrieval eval (recall@k, MRR) | — | — | `brain eval` |
 | Usage metrics | — | `GET /metrics` | `brain metrics` |
+| **Checkpoint (real-time)** | `brain_checkpoint` | `POST /checkpoint` | `brain checkpoint` |
+| **Resume (where was I)** | `brain_resume` | `GET /resume` | `brain resume` |
+| List sessions | — | `GET /sessions` | `brain sessions` |
+| **Add a directive (always-applied)** | `brain_add_directive` | `POST /directives` | `brain directive` |
+| List directives | — | `GET /directives` | — |
+| Pin / unpin a memory | — | `POST /pin` | `brain pin` |
+| Per-agent SOUL/prefs/blocks | `brain_learn`/`brain_remember_preference`/`brain_set_block` (`personal=True`) | `agent_scope=true` | `--personal` |
 | Stats | — | `GET /stats` | `brain stats` |
 | Liveness | — | `GET /health` | — |
 

@@ -272,3 +272,34 @@ def test_api_archive_export_import(client):
     al = client.post("/alias", json={"alias": "k8s", "canonical": "Kubernetes"}, headers=AAA)
     assert al.status_code == 200
     assert client.post("/maintenance/sleep", headers=AAA).status_code == 200
+
+
+# --- graph data (dashboard) --------------------------------------------
+def test_graph_data_entities_mode(brain):
+    brain.save(content="link [[Alpha]] and [[Beta]]", title="g1", project="p")
+    brain.save(content="more [[Beta]] and [[Gamma]]", title="g2", project="p")
+    g = brain.graph_data(project="p", mode="entities")
+    assert g["mode"] == "entities"
+    labels = {n["label"] for n in g["nodes"]}
+    assert {"Alpha", "Beta", "Gamma"} <= labels
+    assert any(e["kind"] == "co-occurrence" for e in g["edges"])
+    assert all("group" in n for n in g["nodes"])  # community color
+
+
+def test_graph_data_notes_mode(brain):
+    a = brain.save(content="note about [[Shared]] topic one", title="n1", project="p")
+    brain.save(content="note about [[Shared]] topic two", title="n2", project="p")
+    g = brain.graph_data(project="p", mode="notes")
+    assert g["mode"] == "notes"
+    ids = {n["id"] for n in g["nodes"]}
+    assert a["id"] in ids
+    assert any(e["kind"] == "shared-entity" for e in g["edges"])
+
+
+def test_api_graph(client):
+    client.post("/save", json={"content": "graph [[Node]] here", "title": "x"}, headers=AAA)
+    r = client.get("/graph", params={"mode": "entities"}, headers=AAA)
+    assert r.status_code == 200 and "nodes" in r.json()
+    rn = client.get("/graph", params={"mode": "notes"}, headers=AAA)
+    assert rn.status_code == 200 and rn.json()["mode"] == "notes"
+    assert client.get("/graph", params={"mode": "bogus"}, headers=AAA).status_code == 422

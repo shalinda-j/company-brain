@@ -2,4 +2,4 @@
 semantic + procedural + graph + self (SOUL) + preferences, with multi-layer
 recall, dreaming, a heartbeat, and autonomous (access-based) learning."""
 
-__version__ = "0.0.1.3"
+__version__ = "0.0.1.6"

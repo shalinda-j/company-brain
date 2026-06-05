@@ -23,6 +23,7 @@ VALID_CATEGORIES = {
     "activity",
     "procedure",
     "self",
+    "directive",
 }
 
 
@@ -49,6 +50,7 @@ class Note:
     access_count: int = 0
     importance: int = 1
     archived: bool = False
+    pinned: bool = False
     user: str = ""
 
     def frontmatter(self) -> dict:
@@ -69,6 +71,7 @@ class Note:
             "access_count": self.access_count,
             "importance": self.importance,
             "archived": self.archived,
+            "pinned": self.pinned,
         }
 
     def to_dict(self) -> dict:
@@ -115,6 +118,7 @@ def write_note(
     access_count: int = 0,
     importance: int = 1,
     archived: bool = False,
+    pinned: bool = False,
     user: str = "",
 ) -> Note:
     project = sanitize_project(project)
@@ -141,6 +145,7 @@ def write_note(
         access_count=access_count,
         importance=importance,
         archived=archived,
+        pinned=pinned,
         user=user,
     )
     path = _path_for(note)
@@ -192,6 +197,7 @@ def _parse(path: Path, project: str) -> Note | None:
         access_count=_int(fm.get("access_count")),
         importance=_int(fm.get("importance"), 1),
         archived=bool(fm.get("archived") or False),
+        pinned=bool(fm.get("pinned") or False),
     )
 
 

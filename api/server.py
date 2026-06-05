@@ -101,6 +101,7 @@ class SaveIn(BaseModel):
     links: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
     project: str | None = None
+    pinned: bool = False
     allow_duplicate: bool = False
 
 
@@ -140,17 +141,20 @@ class FeedbackIn(BaseModel):
 class SoulIn(BaseModel):
     text: str = Field(min_length=1)
     project: str | None = None
+    agent_scope: bool = False
 
 
 class PrincipleIn(BaseModel):
     principle: str = Field(min_length=1)
     project: str | None = None
+    agent_scope: bool = False
 
 
 class PrefIn(BaseModel):
     key: str = Field(min_length=1)
     value: str
     project: str | None = None
+    agent_scope: bool = False
 
 
 class OntologyIn(BaseModel):
@@ -168,6 +172,28 @@ class FactIn(BaseModel):
 class BlockIn(BaseModel):
     name: str = Field(min_length=1)
     text: str = Field(min_length=1)
+    project: str | None = None
+    agent_scope: bool = False
+
+
+class PinIn(BaseModel):
+    note_id: str
+    pinned: bool = True
+    project: str | None = None
+
+
+class DirectiveIn(BaseModel):
+    text: str = Field(min_length=1)
+    project: str | None = None
+
+
+class CheckpointIn(BaseModel):
+    note: str = Field(min_length=1)
+    session: str = "default"
+    files: list[str] = Field(default_factory=list)
+    git_ref: str = ""
+    next: str = ""
+    status: str = "working"
     project: str | None = None
 
 
@@ -216,6 +242,7 @@ async def save(request: Request, body: SaveIn, agent: str = Depends(require_agen
         links=body.links,
         entities=body.entities,
         project=body.project,
+        pinned=body.pinned,
         allow_duplicate=body.allow_duplicate,
     )
     audit(
@@ -269,6 +296,7 @@ async def recall(request: Request, body: RecallIn, agent: str = Depends(require_
         query=body.query,
         project=body.project,
         user=body.user,
+        agent=agent,
         token_budget=body.token_budget,
         searched_by=agent,
     )
@@ -344,14 +372,16 @@ async def get_soul(project: str | None = None, agent: str = Depends(require_agen
 
 @app.post("/soul")
 async def set_soul(body: SoulIn, agent: str = Depends(require_agent)):
-    audit("set_soul", agent=agent, project=body.project)
-    return {"soul": brain.set_soul(body.text, project=body.project)}
+    scoped = agent if body.agent_scope else None
+    audit("set_soul", agent=agent, project=body.project, scoped=body.agent_scope)
+    return {"soul": brain.set_soul(body.text, project=body.project, agent=scoped)}
 
 
 @app.post("/soul/learn")
 async def learn_principle(body: PrincipleIn, agent: str = Depends(require_agent)):
-    audit("learn_principle", agent=agent, project=body.project)
-    return {"soul": brain.learn_principle(body.principle, project=body.project)}
+    scoped = agent if body.agent_scope else None
+    audit("learn_principle", agent=agent, project=body.project, scoped=body.agent_scope)
+    return {"soul": brain.learn_principle(body.principle, project=body.project, agent=scoped)}
 
 
 @app.get("/preferences")
@@ -361,8 +391,13 @@ async def get_prefs(project: str | None = None, agent: str = Depends(require_age
 
 @app.post("/preferences")
 async def set_pref(body: PrefIn, agent: str = Depends(require_agent)):
-    audit("set_pref", agent=agent, project=body.project)
-    return {"preferences": brain.set_preference(body.key, body.value, project=body.project)}
+    scoped = agent if body.agent_scope else None
+    audit("set_pref", agent=agent, project=body.project, scoped=body.agent_scope)
+    return {
+        "preferences": brain.set_preference(
+            body.key, body.value, project=body.project, agent=scoped
+        )
+    }
 
 
 @app.get("/ontology")
@@ -440,8 +475,9 @@ async def get_blocks(project: str | None = None, agent: str = Depends(require_ag
 
 @app.post("/blocks")
 async def set_block(body: BlockIn, agent: str = Depends(require_agent)):
-    audit("set_block", agent=agent, project=body.project, name=body.name)
-    return {"block": brain.set_block(body.name, body.text, project=body.project)}
+    scoped = agent if body.agent_scope else None
+    audit("set_block", agent=agent, project=body.project, name=body.name, scoped=body.agent_scope)
+    return {"block": brain.set_block(body.name, body.text, project=body.project, agent=scoped)}
 
 
 @app.get("/block/{name}")
@@ -453,6 +489,18 @@ async def get_block(name: str, project: str | None = None, agent: str = Depends(
 @app.get("/communities")
 async def communities(project: str | None = None, agent: str = Depends(require_agent)):
     return {"communities": brain.communities(project=project)}
+
+
+@app.get("/graph")
+async def graph_data(
+    project: str | None = None,
+    mode: str = "entities",
+    limit: int = 400,
+    agent: str = Depends(require_agent),
+):
+    if mode not in ("entities", "notes"):
+        raise HTTPException(status_code=422, detail="mode must be 'entities' or 'notes'")
+    return brain.graph_data(project=project, mode=mode, limit=max(1, min(limit, 2000)))
 
 
 @app.get("/entities/{entity}/multihop")
@@ -470,6 +518,28 @@ async def entity_multihop(
 async def set_alias(body: AliasIn, agent: str = Depends(require_agent)):
     audit("set_alias", agent=agent)
     return {"aliases": brain.set_alias(body.alias, body.canonical)}
+
+
+# --- directives (always-applied) ----------------------------------------
+@app.get("/directives")
+async def get_directives(project: str | None = None, agent: str = Depends(require_agent)):
+    return {"directives": brain.directives(project=project)}
+
+
+@app.post("/directives")
+async def add_directive(body: DirectiveIn, agent: str = Depends(require_agent)):
+    note = brain.add_directive(body.text, project=body.project, agent=agent)
+    audit("add_directive", agent=agent, project=note["project"], note_id=note["id"])
+    return note
+
+
+@app.post("/pin")
+async def pin(body: PinIn, agent: str = Depends(require_agent)):
+    res = brain.set_pinned(body.note_id, body.pinned, project=body.project)
+    if res is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    audit("pin", agent=agent, note_id=body.note_id, pinned=body.pinned)
+    return res
 
 
 # --- archival -----------------------------------------------------------
@@ -511,6 +581,39 @@ async def sleep_cycle(project: str | None = None, agent: str = Depends(require_a
     res = brain.sleep_cycle(project=project)
     audit("sleep", agent=agent, project=res["project"])
     return res
+
+
+# --- real-time session / checkpoint layer -------------------------------
+@app.post("/checkpoint")
+@limiter.limit(config.rate_limit)
+async def checkpoint(request: Request, body: CheckpointIn, agent: str = Depends(require_agent)):
+    rec = brain.checkpoint(
+        note=body.note,
+        session_id=body.session,
+        agent=agent,
+        files=body.files,
+        git_ref=body.git_ref,
+        next_step=body.next,
+        status=body.status,
+        project=body.project,
+    )
+    audit("checkpoint", agent=agent, project=body.project, session=rec["session"])
+    return rec
+
+
+@app.get("/resume")
+async def resume(
+    session: str | None = None,
+    project: str | None = None,
+    n: int = 5,
+    agent: str = Depends(require_agent),
+):
+    return brain.resume(session_id=session, project=project, n=max(1, min(n, 50)))
+
+
+@app.get("/sessions")
+async def sessions(project: str | None = None, agent: str = Depends(require_agent)):
+    return {"sessions": brain.sessions(project=project)}
 
 
 @app.delete("/delete/{note_id}")

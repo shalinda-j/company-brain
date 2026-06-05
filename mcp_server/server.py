@@ -248,21 +248,35 @@ def brain_entities(project: str = "") -> str:
 
 
 @mcp.tool()
-def brain_learn(principle: str, project: str = "") -> str:
-    """Teach the brain a durable principle about how to work — it's appended to the
-    project's SOUL and surfaced in every future recall."""
+def brain_learn(principle: str, project: str = "", personal: bool = False) -> str:
+    """Teach the brain a durable principle. Appended to the project SOUL (shared by
+    all agents) and surfaced in every recall. Set personal=True to write it to THIS
+    agent's own SOUL overlay instead of the shared one."""
     with _client() as c:
-        r = c.post("/soul/learn", json={"principle": principle, "project": _proj(project)})
+        r = c.post(
+            "/soul/learn",
+            json={"principle": principle, "project": _proj(project), "agent_scope": personal},
+        )
         r.raise_for_status()
     return "Learned. It will appear in future recalls."
 
 
 @mcp.tool()
-def brain_remember_preference(key: str, value: str, project: str = "") -> str:
-    """Store a user/agent preference (key + value). Preferences are surfaced in
-    every recall."""
+def brain_remember_preference(
+    key: str, value: str, project: str = "", personal: bool = False
+) -> str:
+    """Store a preference (key + value), surfaced in every recall. personal=True
+    writes to THIS agent's overlay instead of the shared project preferences."""
     with _client() as c:
-        r = c.post("/preferences", json={"key": key, "value": value, "project": _proj(project)})
+        r = c.post(
+            "/preferences",
+            json={
+                "key": key,
+                "value": value,
+                "project": _proj(project),
+                "agent_scope": personal,
+            },
+        )
         r.raise_for_status()
     return f"Saved preference {key} = {value}."
 
@@ -317,11 +331,19 @@ def brain_facts(subject: str = "", project: str = "") -> str:
 
 
 @mcp.tool()
-def brain_set_block(name: str, text: str, project: str = "") -> str:
-    """Write a core memory block (e.g. 'human' = facts about the user). Blocks are
-    size-limited and always included in recall."""
+def brain_set_block(name: str, text: str, project: str = "", personal: bool = False) -> str:
+    """Write a core memory block (e.g. 'human' = facts about the user). Always in
+    recall. personal=True writes to THIS agent's overlay block instead of shared."""
     with _client() as c:
-        r = c.post("/blocks", json={"name": name, "text": text, "project": _proj(project)})
+        r = c.post(
+            "/blocks",
+            json={
+                "name": name,
+                "text": text,
+                "project": _proj(project),
+                "agent_scope": personal,
+            },
+        )
         r.raise_for_status()
     return f"Block '{name}' saved."
 
@@ -335,6 +357,71 @@ def brain_doctor(project: str = "") -> str:
         r.raise_for_status()
         s = r.json().get("summary", {})
     return "Memory health — " + ", ".join(f"{k}: {v}" for k, v in s.items())
+
+
+@mcp.tool()
+def brain_add_directive(text: str, project: str = "") -> str:
+    """Record an ALWAYS-APPLIED directive (e.g. "never deploy on Fridays"). Unlike a
+    normal memory, a directive is pinned and injected into every recall regardless
+    of the query, so rules are never missed."""
+    with _client() as c:
+        r = c.post("/directives", json={"text": text, "project": _proj(project)})
+        r.raise_for_status()
+        d = r.json()
+    return f"Directive pinned (id={d['id']}). It will appear in every recall."
+
+
+@mcp.tool()
+def brain_checkpoint(
+    note: str,
+    files: list[str] | None = None,
+    next: str = "",
+    session: str = "default",
+    git_ref: str = "",
+    project: str = "",
+) -> str:
+    """Record a real-time checkpoint of what you are doing RIGHT NOW (current step,
+    files you are touching, what comes next). Call this frequently during a task so
+    that if the session crashes you can recover exactly where you were. Cheap and
+    append-only — it does not pollute semantic recall."""
+    payload = {
+        "note": note,
+        "files": files or [],
+        "next": next,
+        "session": session,
+        "git_ref": git_ref,
+        "project": _proj(project),
+    }
+    with _client() as c:
+        r = c.post("/checkpoint", json=payload)
+        r.raise_for_status()
+        d = r.json()
+    return f"Checkpoint saved (session '{d['session']}')."
+
+
+@mcp.tool()
+def brain_resume(session: str = "", project: str = "") -> str:
+    """Recover where you left off: returns the most recent checkpoints for a session
+    (or the latest session). Call at the START of a session after a crash/restart."""
+    params = {"project": _proj(project)}
+    if session:
+        params["session"] = session
+    with _client() as c:
+        r = c.get("/resume", params=params)
+        r.raise_for_status()
+        d = r.json()
+    if not d.get("found"):
+        return "No checkpoints yet."
+    lines = [f"Resuming session '{d['session']}':"]
+    for cp in d.get("recent", []):
+        files = ", ".join(cp.get("files", []))
+        lines.append(
+            f"- {cp['ts']} [{cp.get('status')}] {cp['note']}"
+            + (f"  files: {files}" if files else "")
+            + (f"  next: {cp['next']}" if cp.get("next") else "")
+            + (f"  git: {cp['git_ref'][:10]}" if cp.get("git_ref") else "")
+        )
+    return "\n".join(lines)
 
 
 def main() -> None:

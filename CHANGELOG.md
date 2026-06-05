@@ -6,6 +6,79 @@ All notable changes are documented here. Format based on
 
 ## [Unreleased]
 
+## [0.0.1.6] - 2026-06-06 — Real-time session checkpoints (crash recovery)
+
+Continuously capture "what am I doing right now" so a crash never loses your
+place. All local + tested (91 tests, ruff-clean).
+
+### Added
+- **Session / checkpoint layer** (`brain/session.py`): append-only, cheap,
+  timestamped checkpoints stored under `_sessions/<session>.jsonl` — a reserved
+  dir that is **never embedded or indexed**, so high-frequency writes do not
+  pollute semantic recall.
+  - `checkpoint(note, session, files, git_ref, next, status)` /
+    `POST /checkpoint` / `brain_checkpoint` / CLI `checkpoint`.
+  - `resume(session?)` / `GET /resume` / `brain_resume` / CLI `resume` — recover
+    the latest checkpoints ("where was I", which files, what's next, git ref).
+  - `sessions()` / `GET /sessions` / CLI `sessions` — list session journals.
+  - Checkpoints run through secret/PII **redaction** (honours `REDACT_ON_SAVE`).
+- **Git auto-snapshot daemon** (`scripts/brain-autosnapshot.sh`): a feeder that
+  periodically takes a **non-destructive** snapshot (`git stash create`, working
+  tree untouched), saves it under `refs/snapshots/<session>/<epoch>`, and posts a
+  checkpoint with the snapshot SHA + changed files — so you recover **both**
+  context (brain) and exact file state (`git stash apply <sha>`).
+- **VS Code extension (0.0.2)**: opt-in `companyBrain.autoCheckpoint` records a
+  checkpoint when you save files; new **"Company Brain: Resume (where was I)"**
+  command shows your latest checkpoints and offers to copy the git restore
+  command.
+
+### Feeders (how real-time data gets in)
+The brain stores + serves checkpoints; events come from any of: the AI agent
+calling `brain_checkpoint` each step, the git auto-snapshot daemon, or the VS
+Code autosave hook. Use one or several together.
+
+## [0.0.1.5] - 2026-06-06 — Directives, recall transparency, per-agent identity
+
+Addresses three design gaps (raised in community feedback). All local + tested
+(85 tests, ruff-clean).
+
+### Added
+- **Always-applied directives (pinned tier)** — `add_directive` / `POST /directives`
+  / `brain_add_directive` / CLI `directive`, plus pinning any note via
+  `POST /pin` (CLI `pin`, `set_pinned`). Pinned notes form a **Directives** layer
+  that is injected into **every recall regardless of the query**, so a rule like
+  "never deploy on Fridays" is never missed (previously it landed in the semantic
+  layer and competed for top-k slots).
+- **Recall transparency** — `recall()` now returns `included_layers` and
+  `dropped_layers`, so callers can see exactly what was assembled vs omitted under
+  the token budget (no more silent drops). SOUL, directives, and facts are
+  **guaranteed layers** — protected from being dropped ahead of memories.
+- **Per-agent identity** — SOUL, preferences, and memory blocks now support
+  optional **per-agent overlays** (`_souls/<agent>.md`, `_prefs/<agent>.md`,
+  `_blocks/<agent>/`). Recall **merges shared + the requesting agent's overlay**,
+  so one agent's learned principle no longer rewrites every agent's identity. Set
+  `agent_scope=true` on `/soul`, `/soul/learn`, `/preferences`, `/blocks`
+  (MCP/CLI: `personal=True` / `--personal`).
+- **Per-agent fact reconciliation** — fact invalidation is now scoped by
+  `(subject, predicate, agent)`, so agents no longer clobber each other's facts
+  (last-write-wins is now per-agent). Cross-agent disagreements are **surfaced**
+  as `fact_contradictions` (with the asserting `agents`) by `/doctor` instead of
+  silently overwriting.
+
+### Changed
+- `recall` accepts an `agent` argument and assembles **8 layers** (SOUL ·
+  directives · blocks · preferences · facts · memories · procedures · entities).
+- Notes gain a `pinned` field; `directive` is a new category.
+
+## [0.0.1.4] - 2026-06-05 — Graph endpoint + dashboard
+
+### Added
+- **`GET /graph`**: nodes + edges for a force-directed dashboard graph. `mode=entities`
+  returns the knowledge graph (entities as nodes, co-occurrence edges, colored by
+  community); `mode=notes` returns an Obsidian-style note graph (notes as nodes,
+  edges from explicit links + shared entities). Powers the VS Code extension and
+  the standalone dashboard.
+
 ## [0.0.1.3] - 2026-06-05 — Retrieval, facts, and safety
 
 This release brings Company Brain in line with current SOTA agent-memory systems
