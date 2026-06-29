@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "company-brain": {
+      "type": "local",
+      "command": "brain-mcp",
+      "args": [],
+      "tools": ["*"],
+      "env": {
+        "BRAIN_URL": "https://YOUR_BRAIN_HOST",
+        "BRAIN_API_KEY": "<YOUR_API_KEY>",
+        "BRAIN_AGENT": "github-copilot",
+        "BRAIN_PROJECT": "default",
+        "BRAIN_VERIFY_TLS": "true"
+      }
+    }
+  }
+}

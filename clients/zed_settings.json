@@ -1,0 +1,16 @@
+{
+  "context_servers": {
+    "company-brain": {
+      "source": "custom",
+      "command": "brain-mcp",
+      "args": [],
+      "env": {
+        "BRAIN_URL": "https://YOUR_BRAIN_HOST",
+        "BRAIN_API_KEY": "<YOUR_API_KEY>",
+        "BRAIN_AGENT": "zed",
+        "BRAIN_PROJECT": "default",
+        "BRAIN_VERIFY_TLS": "true"
+      }
+    }
+  }
+}

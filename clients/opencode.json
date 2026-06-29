@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "company-brain": {
+      "type": "local",
+      "command": ["brain-mcp"],
+      "enabled": true,
+      "environment": {
+        "BRAIN_URL": "https://YOUR_BRAIN_HOST",
+        "BRAIN_API_KEY": "<YOUR_API_KEY>",
+        "BRAIN_AGENT": "opencode",
+        "BRAIN_PROJECT": "default",
+        "BRAIN_VERIFY_TLS": "true"
+      }
+    }
+  }
+}
