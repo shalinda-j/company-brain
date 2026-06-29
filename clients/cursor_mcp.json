@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "company-brain": {
+      "command": "brain-mcp",
+      "env": {
+        "BRAIN_URL": "https://YOUR_BRAIN_HOST",
+        "BRAIN_API_KEY": "<YOUR_API_KEY>",
+        "BRAIN_AGENT": "cursor",
+        "BRAIN_PROJECT": "default",
+        "BRAIN_VERIFY_TLS": "true"
+      }
+    }
+  }
+}
