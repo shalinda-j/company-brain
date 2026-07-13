@@ -136,7 +136,13 @@ def test_archive_excludes_from_default_views(brain):
 
 
 # --- doctor -------------------------------------------------------------
-def test_doctor_detects_duplicates_and_pii(brain):
+def test_doctor_detects_duplicates_and_pii(brain, monkeypatch):
+    # REDACT_ON_SAVE now defaults to True, which would scrub the secret before
+    # it ever reaches the vault; disable it so doctor's detector (which covers
+    # pre-existing notes) has something to find.
+    from brain.config import config
+
+    monkeypatch.setattr(config, "redact_on_save", False)
     brain.save(content="identical content for dup detection", title="d1", project="p")
     brain.save(
         content="identical content for dup detection", title="d2", project="p", allow_duplicate=True

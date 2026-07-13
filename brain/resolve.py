@@ -15,6 +15,9 @@ from .config import config
 
 _LOCK = threading.Lock()
 
+# aliases.json cache: path -> (mtime, data); re-read only when mtime changes.
+_ALIAS_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
+
 
 def _path():
     config.data_dir.mkdir(parents=True, exist_ok=True)
@@ -23,12 +26,19 @@ def _path():
 
 def _load() -> dict[str, str]:
     p = _path()
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
+    try:
+        mtime = p.stat().st_mtime
+    except OSError:
+        return {}
+    cached = _ALIAS_CACHE.get(str(p))
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        data = {}
+    _ALIAS_CACHE[str(p)] = (mtime, data)
+    return data
 
 
 def normalize(name: str) -> str:
@@ -38,7 +48,7 @@ def normalize(name: str) -> str:
 
 def set_alias(alias: str, canonical: str) -> dict[str, str]:
     with _LOCK:
-        data = _load()
+        data = dict(_load())  # copy: don't mutate the cached dict in place
         data[normalize(alias)] = canonical.strip()
         _path().write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         return data

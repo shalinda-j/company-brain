@@ -12,7 +12,18 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("anthropic_key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}")),
     ("openai_key", re.compile(r"\bsk-[A-Za-z0-9]{20,}")),
-    ("private_key_block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    (
+        "private_key_block",
+        re.compile(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S
+        ),
+    ),
+    ("github_token", re.compile(r"\bghp_[A-Za-z0-9]{36}\b")),
+    ("github_pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b")),
+    ("slack_token", re.compile(r"\bxox[bpars]-[A-Za-z0-9-]+")),
+    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("stripe_live_key", re.compile(r"\bsk_live_[0-9a-zA-Z]{20,}\b")),
+    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")),
     ("bearer_token", re.compile(r"\bBearer\s+[A-Za-z0-9._-]{16,}")),
     (
         "assignment_secret",

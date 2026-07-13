@@ -6,6 +6,51 @@ All notable changes are documented here. Format based on
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-13 — Audit release: security, retrieval, and ops fixes
+
+> Versioning note: earlier releases ran 1.0.0 → 2.0.0 → 3.0.0 → 0.0.1.x without
+> a consistent scheme. Numbering restarts at **0.2.0** and follows SemVer from
+> here on.
+
+### Fixed
+- **Retrieval ranking**: corrected the score blend so relevance is no longer
+  drowned out by usefulness/access boosts.
+- **Search-log feedback loop**: logged searches (`LOG_SEARCHES`) no longer feed
+  back into ranking as ordinary memories.
+- **Atomic writes**: vault notes are written atomically (write-temp + rename),
+  so a crash can no longer leave a truncated note.
+- **Consolidation archives, never deletes**: duplicate merging now archives the
+  losing notes instead of destroying them.
+- **install.sh**: the health wait loop now exits non-zero on timeout, and the
+  openssl fallback key generator emits valid `key:agent` format.
+
+### Added
+- **Per-key roles**: `BRAIN_API_KEYS` accepts `key:agent:role` with role
+  `admin` / `write` / `read`. Plain `key:agent` still works (defaults to
+  `admin`).
+- **Session close + promotion**: `POST /session/close` (and
+  `Brain.close_session`) summarizes a session's checkpoints into a promoted
+  memory note.
+- **Recency decay**: search ranking now decays stale memories over time.
+- **Per-project caching** for hot lookups.
+- **MCP**: `delete` / `archive` / `pin` tools, plus a `--check` startup flag to
+  verify connectivity.
+- **Backup script**: `scripts/backup.sh` (and `make backup`) tars the vault +
+  audit log with timestamped, pruned archives. See README "Backup & Restore".
+- **Release automation**: `v*` tags build and push
+  `ghcr.io/shalinda-j/company-brain` and create a GitHub Release.
+
+### Changed
+- **Redaction on by default**: `REDACT_ON_SAVE` now defaults to `true`, with
+  new token patterns (GitHub, Slack, Google, JWT).
+- **Real rate limiting**: the per-IP limit is actually enforced across workers.
+- **API binds to `127.0.0.1` by default** (`API_HOST`); remote exposure is
+  opt-in via the Caddy TLS overlay.
+- **Qdrant pinned** to `qdrant/qdrant:v1.12.6` with a healthcheck; the API
+  waits for it to be healthy.
+- **Caddy enforces a 10 MB request-body cap** at the proxy (chunked uploads
+  can bypass app-level Content-Length checks).
+
 ## [0.0.1.6] - 2026-06-06 — Real-time session checkpoints (crash recovery)
 
 Continuously capture "what am I doing right now" so a crash never loses your
@@ -200,7 +245,8 @@ parts are documented optional hooks, not hard requirements.
   multi-agent identity, API-key auth + audit log, Docker deploy with optional
   Caddy HTTPS, one-command installer, offline tests, and CI.
 
-[Unreleased]: https://github.com/USERNAME/company-brain/compare/v3.0.0...HEAD
-[3.0.0]: https://github.com/USERNAME/company-brain/compare/v2.0.0...v3.0.0
-[2.0.0]: https://github.com/USERNAME/company-brain/compare/v1.0.0...v2.0.0
-[1.0.0]: https://github.com/USERNAME/company-brain/releases/tag/v1.0.0
+[Unreleased]: https://github.com/shalinda-j/company-brain/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/shalinda-j/company-brain/releases/tag/v0.2.0
+[3.0.0]: https://github.com/shalinda-j/company-brain/compare/v2.0.0...v3.0.0
+[2.0.0]: https://github.com/shalinda-j/company-brain/compare/v1.0.0...v2.0.0
+[1.0.0]: https://github.com/shalinda-j/company-brain/releases/tag/v1.0.0

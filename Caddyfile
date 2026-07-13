@@ -8,6 +8,12 @@
 {$BRAIN_DOMAIN} {
 	encode gzip
 
+	# Enforce the body cap at the edge too — chunked transfer encoding can
+	# bypass the app's Content-Length-based size check.
+	request_body {
+		max_size 10MB
+	}
+
 	# Security headers
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"

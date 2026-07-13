@@ -17,30 +17,38 @@ def tokenize(text: str) -> list[str]:
     return [t.lower() for t in _TOKEN.findall(text or "")]
 
 
-def bm25_rank(
-    query: str, docs: list[tuple[str, str]], k1: float = 1.5, b: float = 0.75
-) -> list[tuple[str, float]]:
-    """docs: list of (doc_id, text). Returns [(doc_id, score)] ranked desc."""
-    if not docs:
-        return []
-    tokenized = {doc_id: tokenize(text) for doc_id, text in docs}
-    lengths = {d: len(toks) for d, toks in tokenized.items()}
-    n = len(docs)
-    avgdl = (sum(lengths.values()) / n) if n else 0.0
+def bm25_index(docs: list[tuple[str, str]]) -> dict:
+    """Precompute per-corpus BM25 stats once; rank many queries against it
+    with bm25_rank_indexed. docs: list of (doc_id, text)."""
+    tf_by_doc: dict[str, dict[str, int]] = {}
+    lengths: dict[str, int] = {}
     df: dict[str, int] = {}
-    for toks in tokenized.values():
-        for term in set(toks):
-            df[term] = df.get(term, 0) + 1
-    q_terms = [t for t in set(tokenize(query)) if t in df]
-    scores: list[tuple[str, float]] = []
-    for doc_id, toks in tokenized.items():
-        if not toks:
-            scores.append((doc_id, 0.0))
-            continue
+    for doc_id, text in docs:
+        toks = tokenize(text)
+        lengths[doc_id] = len(toks)
         tf: dict[str, int] = {}
         for t in toks:
             tf[t] = tf.get(t, 0) + 1
-        dl = lengths[doc_id]
+        tf_by_doc[doc_id] = tf
+        for term in tf:
+            df[term] = df.get(term, 0) + 1
+    n = len(tf_by_doc)
+    avgdl = (sum(lengths.values()) / n) if n else 0.0
+    return {"tf": tf_by_doc, "lengths": lengths, "df": df, "n": n, "avgdl": avgdl}
+
+
+def bm25_rank_indexed(
+    query: str, index: dict, k1: float = 1.5, b: float = 0.75
+) -> list[tuple[str, float]]:
+    """Rank a prebuilt bm25_index. Docs with score <= 0 (no matching term) are
+    dropped so non-matching docs earn no RRF credit downstream."""
+    n, avgdl, df = index["n"], index["avgdl"], index["df"]
+    if not n:
+        return []
+    q_terms = [t for t in set(tokenize(query)) if t in df]
+    scores: list[tuple[str, float]] = []
+    for doc_id, tf in index["tf"].items():
+        dl = index["lengths"][doc_id]
         score = 0.0
         for term in q_terms:
             f = tf.get(term, 0)
@@ -49,9 +57,17 @@ def bm25_rank(
             idf = math.log(1 + (n - df[term] + 0.5) / (df[term] + 0.5))
             denom = f + k1 * (1 - b + b * dl / avgdl) if avgdl else f + k1
             score += idf * (f * (k1 + 1)) / denom
-        scores.append((doc_id, score))
+        if score > 0:
+            scores.append((doc_id, score))
     scores.sort(key=lambda x: x[1], reverse=True)
     return scores
+
+
+def bm25_rank(
+    query: str, docs: list[tuple[str, str]], k1: float = 1.5, b: float = 0.75
+) -> list[tuple[str, float]]:
+    """docs: list of (doc_id, text). Returns [(doc_id, score)] ranked desc."""
+    return bm25_rank_indexed(query, bm25_index(docs), k1=k1, b=b)
 
 
 def rrf_fuse(*ranked_lists: list[str], k: int = 60) -> list[tuple[str, float]]:

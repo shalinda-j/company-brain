@@ -11,19 +11,31 @@
 
 services:
   qdrant:
-    image: qdrant/qdrant:latest
+    # Pinned: Qdrant is the only stateful service — never let it jump major
+    # versions on a routine pull. Bump deliberately and read its release notes.
+    image: qdrant/qdrant:v1.12.6
     restart: unless-stopped
     volumes:
       - qdrant_data:/qdrant/storage
     networks:
       - brain_net
     # NOTE: intentionally no `ports:` — Qdrant stays private.
+    healthcheck:
+      # The qdrant image ships no curl/wget; a bash TCP probe is enough.
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
 
   brain-api:
     build: .
+    # Prebuilt images are published on tagged releases:
+    #   image: ghcr.io/shalinda-j/company-brain:0.2.0
     restart: unless-stopped
     depends_on:
-      - qdrant
+      qdrant:
+        condition: service_healthy
     env_file:
       - .env
     environment:

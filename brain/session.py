@@ -86,6 +86,45 @@ def _read(project: str, session: str) -> list[dict]:
     return out
 
 
+def read_checkpoints(project: str, session: str) -> list[dict]:
+    """All checkpoints for a session (empty list if none / already closed)."""
+    return _read(vault.sanitize_project(project), session)
+
+
+def close(project: str, session: str) -> int:
+    """Mark a session closed by renaming its journal to <session>.jsonl.closed.
+    Returns the number of checkpoints it held (0 if nothing to close)."""
+    project = vault.sanitize_project(project)
+    n = len(_read(project, session))
+    with _LOCK:
+        p = _path(project, session)
+        if p.exists():
+            target = p.with_name(p.name + ".closed")
+            if target.exists():
+                target.unlink()
+            p.rename(target)
+    return n
+
+
+def export_sessions(project: str) -> dict[str, str]:
+    """filename -> raw JSONL content (open and closed), for export bundles."""
+    d = _dir(vault.sanitize_project(project))
+    return {p.name: p.read_text(encoding="utf-8") for p in sorted(d.glob("*.jsonl*"))}
+
+
+def import_sessions(project: str, data: dict[str, str]) -> int:
+    """Restore session journals from an export bundle. Returns files written."""
+    d = _dir(vault.sanitize_project(project))
+    n = 0
+    for name, text in (data or {}).items():
+        name = name.replace("\\", "/").rsplit("/", 1)[-1]
+        if not name.endswith((".jsonl", ".jsonl.closed")):
+            continue
+        (d / name).write_text(text, encoding="utf-8")
+        n += 1
+    return n
+
+
 def list_sessions(project: str) -> list[dict]:
     project = vault.sanitize_project(project)
     d = _dir(project)

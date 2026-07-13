@@ -1,6 +1,6 @@
 [project]
 name = "company-brain"
-version = "0.0.1.6"
+version = "0.2.0"
 description = "A private, self-hosted second brain with semantic search, REST API, and MCP access."
 readme = "README.md"
 license = { text = "MIT" }

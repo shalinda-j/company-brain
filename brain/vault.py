@@ -6,6 +6,7 @@ reserved and never treated as an ordinary memory.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -97,6 +98,16 @@ def _render(note: Note) -> str:
     return f"---\n{fm}\n---\n\n# {note.title}\n\n{note.content}\n"
 
 
+def atomic_write(path: Path, text: str) -> None:
+    """Write to a temp file in the same directory, then os.replace() onto the
+    target, so a crash mid-write never leaves a partial or missing file.
+    """
+    # ponytail: fixed .tmp name — callers serialize via their own locks / single process
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def ensure_project_dirs(project: str) -> None:
     base = project_dir(project)
     for sub in VALID_CATEGORIES:
@@ -150,7 +161,7 @@ def write_note(
     )
     path = _path_for(note)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_render(note), encoding="utf-8")
+    atomic_write(path, _render(note))
     return note
 
 
@@ -255,11 +266,12 @@ def recent_notes(project: str, n: int = 20, include_archived: bool = True) -> li
 def update_note(note: Note) -> Note:
     note.updated = _now()
     path = find_path(note.project, note.id)
-    if path and path.exists():
-        path.unlink()
     new_path = _path_for(note)
     new_path.parent.mkdir(parents=True, exist_ok=True)
-    new_path.write_text(_render(note), encoding="utf-8")
+    atomic_write(new_path, _render(note))
+    # Remove the old file only after the new one is safely in place.
+    if path and path != new_path and path.exists():
+        path.unlink()
     return note
 
 

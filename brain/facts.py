@@ -40,7 +40,7 @@ def _load(project: str) -> list[dict]:
 
 
 def _save(project: str, facts: list[dict]) -> None:
-    _path(project).write_text(json.dumps(facts, indent=2, ensure_ascii=False), encoding="utf-8")
+    vault.atomic_write(_path(project), json.dumps(facts, indent=2, ensure_ascii=False))
 
 
 def _norm(s: str) -> str:

@@ -68,9 +68,20 @@ def test_activity_per_agent(brain):
 
 
 def test_searches_logged(brain):
+    # Search logs go to <project>/_search_log.jsonl, NOT to notes (logging them
+    # as notes fed old queries back into future retrieval).
+    import json
+
+    from brain import vault
+    from brain.config import config
+
     _seed(brain)
     brain.search("anything", limit=2, searched_by="claude-code")
-    assert any(r["category"] == "activity" for r in brain.recent(50))
+    assert not any(r["category"] == "activity" for r in brain.recent(50))
+    log_path = vault.project_dir("default") / "_search_log.jsonl"
+    assert config.log_searches and log_path.exists()
+    recs = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert any(r["query"] == "anything" and r["agent"] == "claude-code" for r in recs)
 
 
 def test_reindex_rebuilds(brain):

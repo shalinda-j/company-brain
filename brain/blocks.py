@@ -31,8 +31,10 @@ def _path(project: str, name: str, agent: str | None = None):
 
 def _cap(text: str) -> str:
     limit = config.block_char_limit
+    suffix = "\n…(truncated)"
     if len(text) > limit:
-        return text[:limit].rstrip() + "\n…(truncated)"
+        # Truncate so the result including the suffix stays within the limit.
+        return text[: limit - len(suffix)].rstrip() + suffix
     return text
 
 
@@ -42,7 +44,7 @@ def get_block(project: str, name: str, agent: str | None = None) -> str:
 
 
 def set_block(project: str, name: str, text: str, agent: str | None = None) -> str:
-    _path(project, name, agent).write_text(_cap(text), encoding="utf-8")
+    vault.atomic_write(_path(project, name, agent), _cap(text))
     return get_block(project, name, agent)
 
 

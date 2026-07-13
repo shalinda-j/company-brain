@@ -11,6 +11,8 @@ Env:
   BRAIN_PROJECT      default project for this client    (default: default)
   BRAIN_VERIFY_TLS   set false for self-signed certs    (default: true)
 
+Run `brain-mcp --check` to verify connectivity before wiring a client.
+
 Tools: brain_save, brain_ingest, brain_search, brain_get, brain_recent,
 brain_activity, brain_feedback, brain_projects, brain_consolidate.
 """
@@ -18,6 +20,7 @@ brain_activity, brain_feedback, brain_projects, brain_consolidate.
 from __future__ import annotations
 
 import os
+import sys
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -39,6 +42,32 @@ def _client() -> httpx.Client:
         "X-Agent": AGENT_NAME,
     }
     return httpx.Client(base_url=BRAIN_URL, headers=headers, timeout=TIMEOUT, verify=VERIFY_TLS)
+
+
+def _request(method: str, path: str, *, allow_404: bool = False, **kwargs) -> httpx.Response:
+    """Send one request to the brain, translating transport/HTTP failures into
+    readable tool errors instead of raw httpx tracebacks. Tools that handle 404
+    themselves pass allow_404=True and check the status."""
+    try:
+        with _client() as c:
+            r = c.request(method, path, **kwargs)
+    except httpx.ConnectError:
+        raise RuntimeError(
+            f"company-brain unreachable at {BRAIN_URL} — is the server running?"
+        ) from None
+    if r.status_code in (401, 403):
+        raise RuntimeError("authentication failed — check BRAIN_API_KEY")
+    if r.status_code == 404 and allow_404:
+        return r
+    if r.status_code >= 500:
+        raise RuntimeError(f"brain server error {r.status_code} — check the server logs")
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("detail")
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"brain error {r.status_code}: {detail or r.text[:200]}")
+    return r
 
 
 def _proj(project: str) -> str:
@@ -65,10 +94,7 @@ def brain_save(
         "source": source,
         "project": _proj(project),
     }
-    with _client() as c:
-        r = c.post("/save", json=payload)
-        r.raise_for_status()
-        d = r.json()
+    d = _request("POST", "/save", json=payload).json()
     if d.get("duplicate"):
         return (
             f"Already in brain as id={d['id']} (similarity {d.get('similarity')}). Not duplicated."
@@ -83,10 +109,7 @@ def brain_ingest(
     """Capture conversation text as a memory. Use at the end of a task to remember
     what was decided/done (optionally auto-summarized if the server is configured)."""
     payload = {"text": text, "title": title or None, "source": source, "project": _proj(project)}
-    with _client() as c:
-        r = c.post("/ingest", json=payload)
-        r.raise_for_status()
-        d = r.json()
+    d = _request("POST", "/ingest", json=payload).json()
     return f"Captured id={d['id']} in project '{d['project']}'."
 
 
@@ -101,10 +124,7 @@ def brain_search(
         payload["category"] = category
     if agent:
         payload["agent"] = agent
-    with _client() as c:
-        r = c.post("/search", json=payload)
-        r.raise_for_status()
-        hits = r.json().get("results", [])
+    hits = _request("POST", "/search", json=payload).json().get("results", [])
     if not hits:
         return "No relevant memories found."
     lines = []
@@ -120,12 +140,10 @@ def brain_search(
 @mcp.tool()
 def brain_get(note_id: str, project: str = "") -> str:
     """Fetch one memory in full by its id."""
-    with _client() as c:
-        r = c.get(f"/get/{note_id}", params={"project": _proj(project)})
-        if r.status_code == 404:
-            return f"No memory with id={note_id}."
-        r.raise_for_status()
-        n = r.json()
+    r = _request("GET", f"/get/{note_id}", allow_404=True, params={"project": _proj(project)})
+    if r.status_code == 404:
+        return f"No memory with id={note_id}."
+    n = r.json()
     header = (
         f"# {n['title']}\n"
         f"(id={n['id']}, project={n['project']}, category={n['category']}, "
@@ -138,10 +156,9 @@ def brain_get(note_id: str, project: str = "") -> str:
 @mcp.tool()
 def brain_recent(n: int = 20, project: str = "") -> str:
     """List the most recently updated memories in a project."""
-    with _client() as c:
-        r = c.get("/recent", params={"n": n, "project": _proj(project)})
-        r.raise_for_status()
-        items = r.json().get("results", [])
+    items = _request("GET", "/recent", params={"n": n, "project": _proj(project)}).json().get(
+        "results", []
+    )
     if not items:
         return "No memories yet."
     return "\n".join(
@@ -157,10 +174,7 @@ def brain_activity(who: str = "", n: int = 20, project: str = "") -> str:
     params = {"n": n, "project": _proj(project)}
     if who:
         params["who"] = who
-    with _client() as c:
-        r = c.get("/activity", params=params)
-        r.raise_for_status()
-        items = r.json().get("results", [])
+    items = _request("GET", "/activity", params=params).json().get("results", [])
     if not items:
         return "No activity recorded."
     return "\n".join(
@@ -174,22 +188,17 @@ def brain_feedback(note_id: str, useful: bool = True, project: str = "") -> str:
     """Mark a memory as useful (or not). Useful memories rank higher in future
     searches."""
     payload = {"note_id": note_id, "useful": useful, "project": _proj(project)}
-    with _client() as c:
-        r = c.post("/feedback", json=payload)
-        if r.status_code == 404:
-            return f"No memory with id={note_id}."
-        r.raise_for_status()
-        d = r.json()
+    r = _request("POST", "/feedback", allow_404=True, json=payload)
+    if r.status_code == 404:
+        return f"No memory with id={note_id}."
+    d = r.json()
     return f"Updated id={d['id']} usefulness={d['usefulness']}."
 
 
 @mcp.tool()
 def brain_projects() -> str:
     """List all projects in the brain with their memory counts."""
-    with _client() as c:
-        r = c.get("/projects")
-        r.raise_for_status()
-        items = r.json().get("projects", [])
+    items = _request("GET", "/projects").json().get("projects", [])
     if not items:
         return "No projects yet."
     return "\n".join(f"- {p['project']}: {p['notes']} notes, {p['vectors']} vectors" for p in items)
@@ -198,10 +207,7 @@ def brain_projects() -> str:
 @mcp.tool()
 def brain_consolidate(project: str = "") -> str:
     """Self-optimize a project: merge near-duplicate memories into one."""
-    with _client() as c:
-        r = c.post("/maintenance/consolidate", params={"project": _proj(project)})
-        r.raise_for_status()
-        d = r.json()
+    d = _request("POST", "/maintenance/consolidate", params={"project": _proj(project)}).json()
     return (
         f"Consolidated project '{d['project']}': merged/removed {d['removed']} duplicate memories."
     )
@@ -213,20 +219,16 @@ def brain_recall(query: str, project: str = "") -> str:
     memories, procedures, and related entities into one token-budgeted context
     bundle. Use this at the START of a task to load everything relevant at once."""
     payload = {"query": query, "project": _proj(project)}
-    with _client() as c:
-        r = c.post("/recall", json=payload)
-        r.raise_for_status()
-        d = r.json()
+    d = _request("POST", "/recall", json=payload).json()
     return d.get("context") or "No context found."
 
 
 @mcp.tool()
 def brain_related(note_id: str, project: str = "") -> str:
     """Find memories related to a given memory (by shared entities + similarity)."""
-    with _client() as c:
-        r = c.get(f"/related/{note_id}", params={"project": _proj(project)})
-        r.raise_for_status()
-        items = r.json().get("related", [])
+    items = _request(
+        "GET", f"/related/{note_id}", params={"project": _proj(project)}
+    ).json().get("related", [])
     if not items:
         return "No related memories."
     return "\n".join(
@@ -238,10 +240,9 @@ def brain_related(note_id: str, project: str = "") -> str:
 def brain_entities(project: str = "") -> str:
     """List the knowledge-graph entities in a project (people, topics, things)
     with how often each is mentioned."""
-    with _client() as c:
-        r = c.get("/entities", params={"project": _proj(project)})
-        r.raise_for_status()
-        items = r.json().get("entities", [])
+    items = _request("GET", "/entities", params={"project": _proj(project)}).json().get(
+        "entities", []
+    )
     if not items:
         return "No entities yet. Mention them with [[wikilinks]] or #hashtags."
     return "\n".join(f"- {e['entity']} ({e['mentions']})" for e in items[:40])
@@ -252,12 +253,11 @@ def brain_learn(principle: str, project: str = "", personal: bool = False) -> st
     """Teach the brain a durable principle. Appended to the project SOUL (shared by
     all agents) and surfaced in every recall. Set personal=True to write it to THIS
     agent's own SOUL overlay instead of the shared one."""
-    with _client() as c:
-        r = c.post(
-            "/soul/learn",
-            json={"principle": principle, "project": _proj(project), "agent_scope": personal},
-        )
-        r.raise_for_status()
+    _request(
+        "POST",
+        "/soul/learn",
+        json={"principle": principle, "project": _proj(project), "agent_scope": personal},
+    )
     return "Learned. It will appear in future recalls."
 
 
@@ -267,17 +267,16 @@ def brain_remember_preference(
 ) -> str:
     """Store a preference (key + value), surfaced in every recall. personal=True
     writes to THIS agent's overlay instead of the shared project preferences."""
-    with _client() as c:
-        r = c.post(
-            "/preferences",
-            json={
-                "key": key,
-                "value": value,
-                "project": _proj(project),
-                "agent_scope": personal,
-            },
-        )
-        r.raise_for_status()
+    _request(
+        "POST",
+        "/preferences",
+        json={
+            "key": key,
+            "value": value,
+            "project": _proj(project),
+            "agent_scope": personal,
+        },
+    )
     return f"Saved preference {key} = {value}."
 
 
@@ -285,10 +284,7 @@ def brain_remember_preference(
 def brain_dream(project: str = "") -> str:
     """Run a reflection pass: merge duplicates and synthesize digest notes from
     clusters of related memories (self-optimization)."""
-    with _client() as c:
-        r = c.post("/maintenance/dream", params={"project": _proj(project)})
-        r.raise_for_status()
-        d = r.json()
+    d = _request("POST", "/maintenance/dream", params={"project": _proj(project)}).json()
     return (
         f"Dreamed on '{d['project']}': merged {d['consolidated']} duplicates, "
         f"created {d['digests_created']} digests."
@@ -306,10 +302,7 @@ def brain_remember_fact(subject: str, value: str, predicate: str = "is", project
         "predicate": predicate,
         "project": _proj(project),
     }
-    with _client() as c:
-        r = c.post("/facts", json=payload)
-        r.raise_for_status()
-        d = r.json()
+    d = _request("POST", "/facts", json=payload).json()
     inv = len(d.get("invalidated", []))
     extra = f" (superseded {inv} prior)" if inv else ""
     return f"Recorded: {subject} {predicate} {value}.{extra}"
@@ -321,10 +314,7 @@ def brain_facts(subject: str = "", project: str = "") -> str:
     params = {"project": _proj(project)}
     if subject:
         params["subject"] = subject
-    with _client() as c:
-        r = c.get("/facts", params=params)
-        r.raise_for_status()
-        items = r.json().get("facts", [])
+    items = _request("GET", "/facts", params=params).json().get("facts", [])
     if not items:
         return "No facts."
     return "\n".join(f"- {f['subject']} {f['predicate']} {f['value']}" for f in items)
@@ -334,28 +324,35 @@ def brain_facts(subject: str = "", project: str = "") -> str:
 def brain_set_block(name: str, text: str, project: str = "", personal: bool = False) -> str:
     """Write a core memory block (e.g. 'human' = facts about the user). Always in
     recall. personal=True writes to THIS agent's overlay block instead of shared."""
-    with _client() as c:
-        r = c.post(
-            "/blocks",
-            json={
-                "name": name,
-                "text": text,
-                "project": _proj(project),
-                "agent_scope": personal,
-            },
-        )
-        r.raise_for_status()
+    _request(
+        "POST",
+        "/blocks",
+        json={
+            "name": name,
+            "text": text,
+            "project": _proj(project),
+            "agent_scope": personal,
+        },
+    )
     return f"Block '{name}' saved."
+
+
+@mcp.tool()
+def brain_blocks(project: str = "") -> str:
+    """List the core memory blocks (name + content) in a project."""
+    blocks = _request("GET", "/blocks", params={"project": _proj(project)}).json().get(
+        "blocks", {}
+    )
+    if not blocks:
+        return "No blocks yet."
+    return "\n\n".join(f"## {name}\n{text}" for name, text in blocks.items())
 
 
 @mcp.tool()
 def brain_doctor(project: str = "") -> str:
     """Audit memory quality: duplicates, stale items, orphan entities, oversized
     blocks, possible secrets/PII, and contradictory facts."""
-    with _client() as c:
-        r = c.get("/doctor", params={"project": _proj(project)})
-        r.raise_for_status()
-        s = r.json().get("summary", {})
+    s = _request("GET", "/doctor", params={"project": _proj(project)}).json().get("summary", {})
     return "Memory health — " + ", ".join(f"{k}: {v}" for k, v in s.items())
 
 
@@ -364,11 +361,57 @@ def brain_add_directive(text: str, project: str = "") -> str:
     """Record an ALWAYS-APPLIED directive (e.g. "never deploy on Fridays"). Unlike a
     normal memory, a directive is pinned and injected into every recall regardless
     of the query, so rules are never missed."""
-    with _client() as c:
-        r = c.post("/directives", json={"text": text, "project": _proj(project)})
-        r.raise_for_status()
-        d = r.json()
+    d = _request("POST", "/directives", json={"text": text, "project": _proj(project)}).json()
     return f"Directive pinned (id={d['id']}). It will appear in every recall."
+
+
+@mcp.tool()
+def brain_directives(project: str = "") -> str:
+    """List the always-applied directives pinned in a project."""
+    items = _request("GET", "/directives", params={"project": _proj(project)}).json().get(
+        "directives", []
+    )
+    if not items:
+        return "No directives."
+    return "\n".join(
+        f"- {d.get('title')} (id={d.get('id')}, by={d.get('agent')})\n    {d.get('text', '')}"
+        for d in items
+    )
+
+
+@mcp.tool()
+def brain_delete(note_id: str, project: str = "") -> str:
+    """Permanently delete a memory by id (removes the note and its vectors).
+    Use brain_archive instead if you might need it back."""
+    r = _request(
+        "DELETE", f"/delete/{note_id}", allow_404=True, params={"project": _proj(project)}
+    )
+    if r.status_code == 404:
+        return f"No memory with id={note_id}."
+    return f"Deleted id={r.json()['deleted']}."
+
+
+@mcp.tool()
+def brain_archive(note_id: str, project: str = "", archived: bool = True) -> str:
+    """Archive a memory so it stops surfacing in search/recall (reversible —
+    pass archived=False to restore it)."""
+    payload = {"note_id": note_id, "archived": archived, "project": _proj(project)}
+    r = _request("POST", "/archive", allow_404=True, json=payload)
+    if r.status_code == 404:
+        return f"No memory with id={note_id}."
+    return f"{'Archived' if archived else 'Unarchived'} id={note_id}."
+
+
+@mcp.tool()
+def brain_pin(note_id: str, project: str = "", pinned: bool = True) -> str:
+    """Pin a memory as an always-applied directive (pass pinned=False to unpin)."""
+    payload = {"note_id": note_id, "pinned": pinned, "project": _proj(project)}
+    r = _request("POST", "/pin", allow_404=True, json=payload)
+    if r.status_code == 404:
+        return f"No memory with id={note_id}."
+    if pinned:
+        return f"Pinned id={note_id}. It will appear in every recall."
+    return f"Unpinned id={note_id}."
 
 
 @mcp.tool()
@@ -392,10 +435,7 @@ def brain_checkpoint(
         "git_ref": git_ref,
         "project": _proj(project),
     }
-    with _client() as c:
-        r = c.post("/checkpoint", json=payload)
-        r.raise_for_status()
-        d = r.json()
+    d = _request("POST", "/checkpoint", json=payload).json()
     return f"Checkpoint saved (session '{d['session']}')."
 
 
@@ -406,10 +446,7 @@ def brain_resume(session: str = "", project: str = "") -> str:
     params = {"project": _proj(project)}
     if session:
         params["session"] = session
-    with _client() as c:
-        r = c.get("/resume", params=params)
-        r.raise_for_status()
-        d = r.json()
+    d = _request("GET", "/resume", params=params).json()
     if not d.get("found"):
         return "No checkpoints yet."
     lines = [f"Resuming session '{d['session']}':"]
@@ -424,7 +461,53 @@ def brain_resume(session: str = "", project: str = "") -> str:
     return "\n".join(lines)
 
 
+@mcp.tool()
+def brain_session_close(project: str = "", session: str = "default") -> str:
+    """Close a session: summarize its checkpoints into one durable memory. Call
+    at the END of a task/session."""
+    d = _request(
+        "POST", "/session/close", json={"project": _proj(project), "session": session}
+    ).json()
+    sid = d.get("summary_note_id")
+    n = d.get("checkpoints", 0)
+    if sid:
+        return f"Session '{session}' closed: {n} checkpoints summarized into id={sid}."
+    return f"Session '{session}' closed ({n} checkpoints, no summary created)."
+
+
+def _require_env() -> None:
+    missing = [v for v in ("BRAIN_URL", "BRAIN_API_KEY") if not os.getenv(v)]
+    if missing:
+        print(
+            f"{' and '.join(missing)} not set — configure the env for this MCP server "
+            "(see clients/README.md).",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+
+def _check() -> int:
+    """Preflight for `brain-mcp --check`: env vars, then /health with the
+    configured headers/TLS settings (plus a key check when auth is enabled)."""
+    for var in ("BRAIN_URL", "BRAIN_API_KEY"):
+        if not os.getenv(var):
+            print(f"FAIL: {var} is not set")
+            return 1
+    try:
+        d = _request("GET", "/health").json()
+        if d.get("auth"):
+            _request("GET", "/projects")  # /health is unauthenticated; verify the key too
+    except (RuntimeError, httpx.HTTPError) as exc:
+        print(f"FAIL: {exc}")
+        return 1
+    print(f"PASS: company-brain {d.get('version', '?')} at {BRAIN_URL}")
+    return 0
+
+
 def main() -> None:
+    if "--check" in sys.argv[1:]:
+        raise SystemExit(_check())
+    _require_env()
     mcp.run()
 
 

@@ -263,6 +263,16 @@ def cmd_archive(a):
     return 0
 
 
+def cmd_delete(a):
+    with _client() as c:
+        r = c.delete(f"/delete/{a.id}", params={"project": _proj(a)})
+    if r.status_code != 200:
+        print(f"error {r.status_code}: {r.text}", file=sys.stderr)
+        return 1
+    _print(r.json())
+    return 0
+
+
 def cmd_communities(a):
     return _get("/communities", {"project": _proj(a)})
 
@@ -503,6 +513,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--unarchive", action="store_true")
     _add_project(s)
     s.set_defaults(func=cmd_archive)
+
+    s = sub.add_parser("delete", help="permanently delete a memory by id")
+    s.add_argument("id")
+    _add_project(s)
+    s.set_defaults(func=cmd_delete)
 
     s = sub.add_parser("communities", help="detect entity communities")
     _add_project(s)

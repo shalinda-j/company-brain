@@ -49,5 +49,8 @@ def client(tmp_path, monkeypatch):
 
     import api.server as srv
 
+    # The limiter's in-memory storage outlives the (module-cached) app; reset it
+    # so one test's requests never rate-limit another's.
+    srv.limiter.reset()
     with TestClient(srv.app) as c:
         yield c

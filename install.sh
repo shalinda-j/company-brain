@@ -51,7 +51,8 @@ fi
 
 # ---- 2. .env --------------------------------------------------------------
 gen_key() {
-  python3 - "$1" <<'PY' 2>/dev/null || openssl rand -base64 32 | tr -d '/+=' | cut -c1-43
+  # Fallback must also append ":agent" so the key matches BRAIN_API_KEYS format.
+  python3 - "$1" <<'PY' 2>/dev/null || echo "$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-43):$1"
 import secrets, sys
 print(f"{secrets.token_urlsafe(32)}:{sys.argv[1]}")
 PY
@@ -93,14 +94,20 @@ else
 fi
 
 cyan "Waiting for the brain to come up (first run downloads the embed model)..."
+HEALTHY=0
 for i in $(seq 1 60); do
   if curl -fsS "http://127.0.0.1:8000/health" >/dev/null 2>&1 || \
      { [ -n "${BRAIN_DOMAIN:-}" ] && curl -fsS "${BASE}/health" >/dev/null 2>&1; }; then
     green "Brain is healthy."
+    HEALTHY=1
     break
   fi
   sleep 3
 done
+if [ "$HEALTHY" -ne 1 ]; then
+  red "Brain did not become healthy in time. Inspect with: $DC logs brain-api"
+  exit 1
+fi
 
 # ---- 5. Connection info ---------------------------------------------------
 FIRST_KEY="$(grep '^BRAIN_API_KEYS=' .env | cut -d= -f2- | cut -d: -f1)"

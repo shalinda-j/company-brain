@@ -71,6 +71,13 @@ class VectorStore:
         if existing is not None and existing != self.dim:
             # Dimension changed (e.g. embedding model swapped). Rebuild empty;
             # the Brain will re-index this project's vault afterwards.
+            # Purge points FIRST: on Windows, delete_collection's rmtree can
+            # silently fail on the still-locked sqlite storage, and the
+            # recreated collection would reload the old-dim points from it.
+            try:
+                self.client.delete(self.collection, points_selector=Filter(must=[]))
+            except Exception:
+                pass  # best-effort; a clean rmtree makes this a no-op anyway
             self.client.delete_collection(self.collection)
             self._create()
             return True

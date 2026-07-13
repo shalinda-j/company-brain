@@ -3,8 +3,8 @@
 
 Reads the hook JSON on stdin, pulls the latest human prompt + assistant reply from
 the transcript, and POSTs it to the brain's /ingest endpoint, scoped per project
-(cwd basename). Fail-safe: any error is swallowed and it always exits 0, so it can
-never block or break a Claude Code turn.
+(BRAIN_PROJECT env var if set, else cwd basename). Fail-safe: any error is swallowed
+and it always exits 0, so it can never block or break a Claude Code turn.
 
 Setup
 -----
@@ -13,6 +13,7 @@ Setup
        BRAIN_URL=https://YOUR_BRAIN_HOST
        BRAIN_API_KEY=<YOUR_API_KEY>
        BRAIN_VERIFY_TLS=true        # false only for a self-signed / IP cert
+       BRAIN_PROJECT=<project>      # optional; defaults to the cwd basename
 3. Register it in ~/.claude/settings.json:
        {
          "hooks": {
@@ -37,6 +38,7 @@ from pathlib import Path
 BRAIN_URL = os.environ.get("BRAIN_URL", "").rstrip("/")
 BRAIN_API_KEY = os.environ.get("BRAIN_API_KEY", "")
 AGENT = os.environ.get("BRAIN_AGENT", "claude-code")
+PROJECT = os.environ.get("BRAIN_PROJECT", "")
 VERIFY_TLS = os.environ.get("BRAIN_VERIFY_TLS", "true").lower() not in {"0", "false", "no"}
 MAX_SIDE = 6000  # cap each side so bodies stay small
 
@@ -66,7 +68,7 @@ def main() -> int:
     data = json.loads(raw) if raw.strip() else {}
     tpath = data.get("transcript_path")
     cwd = data.get("cwd") or os.getcwd()
-    project = Path(cwd).name or "default"
+    project = PROJECT or Path(cwd).name or "default"
     if not tpath or not os.path.exists(tpath):
         return 0
 

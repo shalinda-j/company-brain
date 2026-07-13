@@ -42,6 +42,14 @@ claude mcp add company-brain brain-mcp -s user \
   -e BRAIN_VERIFY_TLS=true
 ```
 
+## Verify the connection
+```bash
+brain-mcp --check
+```
+Uses the same `BRAIN_URL` / `BRAIN_API_KEY` / `BRAIN_VERIFY_TLS` settings as the
+connector: prints `PASS` with the server version, or `FAIL` naming the missing
+env var / error. Exit code 0/1, so it also works in scripts.
+
 ## Auto-capture (optional)
 `hooks/brain_autosave.py` is a Claude Code `Stop` hook that ingests each finished
 exchange into the brain automatically. See the header of that file to wire it up.

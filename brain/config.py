@@ -82,6 +82,11 @@ class Config:
     # Search re-ranking: blend semantic score with a memory's usefulness/access.
     feedback_weight: float = field(default_factory=lambda: _float("FEEDBACK_WEIGHT", 0.15))
     access_weight: float = field(default_factory=lambda: _float("ACCESS_WEIGHT", 0.10))
+    # Recency: exponential age boost, weight * 0.5 ** (age_days / half_life).
+    recency_weight: float = field(default_factory=lambda: _float("RECENCY_WEIGHT", 0.1))
+    recency_half_life_days: float = field(
+        default_factory=lambda: _float("RECENCY_HALF_LIFE_DAYS", 30)
+    )
     # How many extra candidates to fetch before re-ranking.
     search_overfetch: int = field(default_factory=lambda: _int("SEARCH_OVERFETCH", 3))
 
@@ -111,7 +116,7 @@ class Config:
     # --- Safety: secret/PII redaction -----------------------------------
     # When True, detected secrets are replaced before storing. When False, they
     # are only reported back to the caller (findings) without modifying content.
-    redact_on_save: bool = field(default_factory=lambda: _bool("REDACT_ON_SAVE", False))
+    redact_on_save: bool = field(default_factory=lambda: _bool("REDACT_ON_SAVE", True))
 
     # --- Sleep cycle ----------------------------------------------------
     # When True, the heartbeat's sleep cycle archives stale, low-value memories.
@@ -130,7 +135,7 @@ class Config:
     )
 
     # --- API server ------------------------------------------------------
-    api_host: str = field(default_factory=lambda: os.getenv("API_HOST", "0.0.0.0"))
+    api_host: str = field(default_factory=lambda: os.getenv("API_HOST", "127.0.0.1"))
     api_port: int = field(default_factory=lambda: _int("API_PORT", 8000))
     api_keys_raw: str = field(default_factory=lambda: os.getenv("BRAIN_API_KEYS", ""))
     cors_origins: str = field(default_factory=lambda: os.getenv("CORS_ORIGINS", ""))
@@ -139,6 +144,12 @@ class Config:
 
     # --- Behaviour -------------------------------------------------------
     log_searches: bool = field(default_factory=lambda: _bool("LOG_SEARCHES", True))
+    # Max file size (bytes) accepted by ingest_file/ingest_dir.
+    ingest_max_bytes: int = field(default_factory=lambda: _int("INGEST_MAX_BYTES", 1_048_576))
+    # Sessions idle longer than this get auto-closed (summarized) by tick().
+    session_retention_days: int = field(
+        default_factory=lambda: _int("SESSION_RETENTION_DAYS", 30)
+    )
 
     @property
     def vault_dir(self) -> Path:

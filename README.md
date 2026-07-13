@@ -1,6 +1,6 @@
 # Company Brain 🧠
 
-[![CI](https://github.com/USERNAME/company-brain/actions/workflows/ci.yml/badge.svg)](https://github.com/USERNAME/company-brain/actions/workflows/ci.yml)
+[![CI](https://github.com/shalinda-j/company-brain/actions/workflows/ci.yml/badge.svg)](https://github.com/shalinda-j/company-brain/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-261230.svg)](https://docs.astral.sh/ruff/)
@@ -72,7 +72,7 @@ vault folder directly in Obsidian at any time.
 A 2 vCPU / 4 GB droplet running Ubuntu 24.04 is plenty. No GPU.
 
 ```bash
-git clone <your-repo-url> company-brain
+git clone https://github.com/shalinda-j/company-brain.git
 cd company-brain
 ./install.sh
 ```
@@ -252,13 +252,23 @@ This was a first-class design goal.
 > If you ever pasted an API key somewhere public, rotate it: edit
 > `BRAIN_API_KEYS` in `.env` and `docker compose up -d` again.
 
-### Backup
+### Backup & Restore
 
-Back up the vault (and optionally the Qdrant volume). The vault alone is enough
-— the index rebuilds with `/reindex`.
+The vault alone is enough to recover everything — Qdrant is a rebuildable
+index. `scripts/backup.sh` tars `data/vault` + `data/audit.log` into a
+timestamped archive and keeps the newest 7 (override with `KEEP=n`):
 
 ```bash
-tar czf brain-backup-$(date +%F).tgz data/vault
+make backup                 # writes ./backups/brain-backup-<stamp>.tar.gz
+# cron-able, e.g. daily at 03:00:
+#   0 3 * * * /opt/company-brain/scripts/backup.sh >> /var/log/brain-backup.log 2>&1
+```
+
+Restore = untar into `data/`, then rebuild the index:
+
+```bash
+tar xzf backups/brain-backup-<stamp>.tar.gz -C data
+make reindex                # needs BRAIN_API_KEY set
 ```
 
 ---
@@ -269,7 +279,7 @@ All settings are environment variables (see `.env.example`). Notable ones:
 
 | Var | Default | Notes |
 |-----|---------|-------|
-| `BRAIN_API_KEYS` | — | `key:agent,key2:agent2` (required) |
+| `BRAIN_API_KEYS` | — | `key:agent[:role],…` (required); role is `admin`/`write`/`read`, defaults to `admin` |
 | `EMBED_MODEL` | `paraphrase-multilingual-mpnet-base-v2` | swap for lighter MiniLM or e5-large |
 | `LOG_SEARCHES` | `true` | save every query as a memory |
 | `QDRANT_URL` | (compose sets it) | blank = embedded on-disk Qdrant |

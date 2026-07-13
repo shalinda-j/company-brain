@@ -65,6 +65,37 @@ def append_principle(project: str, principle: str, agent: str | None = None) -> 
     return set_soul(project, text, agent)
 
 
+def soul_for_recall(text: str, budget: int = 800) -> str:
+    """Trim a SOUL to ~budget chars for recall: keep the head (identity/values)
+    plus the MOST RECENT learned-principle lines, instead of a blind prefix cut
+    that never shows principles appended past the budget."""
+    if len(text) <= budget:
+        return text
+    marker = "## Learned principles"
+    if marker not in text:
+        return text[:budget]
+    head, _, tail = text.partition(marker)
+    head = head.rstrip() + "\n\n" + marker + "\n"
+    if len(head) >= budget:
+        return head[:budget]
+    remaining = budget - len(head)
+    picked: list[str] = []
+    for line in reversed([ln for ln in tail.splitlines() if ln.strip()]):
+        if len(line) + 1 > remaining:
+            break
+        picked.insert(0, line)
+        remaining -= len(line) + 1
+    return head + "\n".join(picked)
+
+
+def list_agent_souls(project: str) -> dict[str, str]:
+    """agent -> overlay text, for export bundles."""
+    d = vault.project_dir(vault.sanitize_project(project)) / "_souls"
+    if not d.exists():
+        return {}
+    return {p.stem: p.read_text(encoding="utf-8") for p in sorted(d.glob("*.md"))}
+
+
 def merged_soul(project: str, agent: str | None = None) -> str:
     """Shared project SOUL + the agent's overlay (if any)."""
     shared = get_soul(project).strip()

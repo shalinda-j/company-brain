@@ -17,16 +17,26 @@ from brain.security import (
 
 def test_parse_api_keys_pairs_and_bare():
     keys = parse_api_keys("k1:agentA, k2:agentB, k3")
-    assert keys["k1"] == "agentA"
-    assert keys["k2"] == "agentB"
-    assert keys["k3"] == "default"
+    # Role defaults to admin so legacy "key:agent" entries keep full access.
+    assert keys["k1"] == ("agentA", "admin")
+    assert keys["k2"] == ("agentB", "admin")
+    assert keys["k3"] == ("default", "admin")
+
+
+def test_parse_api_keys_with_roles():
+    keys = parse_api_keys("k1:agentA:read, k2:agentB:write, k3:agentC:admin, k4:agentD:bogus")
+    assert keys["k1"] == ("agentA", "read")
+    assert keys["k2"] == ("agentB", "write")
+    assert keys["k3"] == ("agentC", "admin")
+    # Unknown role suffix is treated as part of the agent name, role stays admin.
+    assert keys["k4"] == ("agentD:bogus", "admin")
 
 
 def test_verify_key(monkeypatch):
     import brain.security as sec
 
-    monkeypatch.setattr(sec, "_API_KEYS", {"good": "claude-code"})
-    assert sec.verify_key("good") == "claude-code"
+    monkeypatch.setattr(sec, "_API_KEYS", {"good": ("claude-code", "admin")})
+    assert sec.verify_key("good") == ("claude-code", "admin")
     assert sec.verify_key("bad") is None
     assert sec.verify_key(None) is None
 

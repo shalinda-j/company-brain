@@ -51,7 +51,7 @@ def _write(project: str, prefs: dict[str, str], agent: str | None = None) -> Non
     p = _path(vault.sanitize_project(project), agent)
     lines = ["# Preferences", ""]
     lines += [f"{k}: {v}" for k, v in sorted(prefs.items())]
-    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    vault.atomic_write(p, "\n".join(lines) + "\n")
 
 
 def set_pref(project: str, key: str, value: str, agent: str | None = None) -> dict[str, str]:

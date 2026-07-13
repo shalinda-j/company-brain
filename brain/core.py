@@ -13,9 +13,15 @@ the vector index, graph, facts, and blocks are rebuildable / portable.
 
 from __future__ import annotations
 
+import calendar
+import json
+import logging
 import math
 import threading
+import time
 from collections import Counter
+
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from . import (
     blocks,
@@ -51,6 +57,11 @@ _PROCEDURE_CUES = (
     "process",
 )
 
+_log = logging.getLogger("brain")
+
+# Directories skipped by ingest_dir (any path containing one of these parts).
+_INGEST_IGNORE = {".git", "node_modules", "venv", ".venv", "__pycache__", "dist", "build"}
+
 _TEXT_EXTS = {
     ".md",
     ".markdown",
@@ -74,6 +85,9 @@ class Brain:
         self._lock = threading.RLock()
         self.embedder = get_embedder(config.embed_model, config.embed_cache_dir)
         self._stores: dict[str, VectorStore] = {}
+        # project -> (notes_by_id, bm25_index); popped on every write path.
+        self._corpus_cache: dict[str, tuple[dict, dict]] = {}
+        self._corpus_gen: dict[str, int] = {}
         self._metrics: Counter = Counter()
         for project in vault.list_projects():
             self._get_store(project)
@@ -89,8 +103,8 @@ class Brain:
                 try:
                     if store.count() == 0 and any(True for _ in vault.iter_notes(project)):
                         self._reindex_project(project, store)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.warning("lazy reindex of project %r failed: %s", project, exc)
             return store
 
     def _index_note(self, store: VectorStore, note) -> int:
@@ -107,6 +121,50 @@ class Brain:
             self._index_note(store, note)
             n += 1
         return n
+
+    # -- corpus cache / metadata-only index updates ----------------------
+    def _corpus(self, project: str) -> tuple[dict, dict]:
+        """(notes_by_id, bm25_index) for a project, cached until a write pops it.
+
+        ponytail: no cache lock — a rebuild that loses the generation race is
+        still returned to its caller, just not cached, so no stale snapshot
+        can be pinned; edits made to vault files outside this process stay
+        stale until the next write or restart."""
+        cached = self._corpus_cache.get(project)
+        if cached is None:
+            gen = self._corpus_gen.get(project, 0)
+            notes_by_id = {n.id: n for n, _ in vault.iter_notes(project)}
+            docs = [(n.id, f"{n.title}\n{n.content}") for n in notes_by_id.values()]
+            cached = (notes_by_id, hybrid.bm25_index(docs))
+            if self._corpus_gen.get(project, 0) == gen:  # no write mid-rebuild
+                self._corpus_cache[project] = cached
+        return cached
+
+    def _invalidate_corpus(self, project: str) -> None:
+        self._corpus_gen[project] = self._corpus_gen.get(project, 0) + 1
+        self._corpus_cache.pop(project, None)
+
+    def _set_payload(self, project: str, note_id: str, payload: dict) -> None:
+        """Update index payload fields (counters/flags) without re-embedding."""
+        store = self._get_store(project)
+        try:
+            store.client.set_payload(
+                store.collection,
+                payload=payload,
+                points=Filter(
+                    must=[FieldCondition(key="note_id", match=MatchValue(value=note_id))]
+                ),
+            )
+        except Exception as exc:
+            _log.warning("payload update for note %s failed: %s", note_id, exc)
+
+    @staticmethod
+    def _age_days(ts: str) -> float | None:
+        try:
+            then = calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, (time.time() - then) / 86400.0)
 
     # -- helpers ---------------------------------------------------------
     @staticmethod
@@ -135,14 +193,19 @@ class Brain:
             "access_count": note.access_count,
             "importance": note.importance,
             "archived": note.archived,
+            "updated": note.updated,
         }
 
     def _final_rank(self, hits: list[dict]) -> list[dict]:
         wu, wa = config.feedback_weight, config.access_weight
+        wr, half_life = config.recency_weight, config.recency_half_life_days
         for h in hits:
             boost = wu * (math.log1p(max(h.get("usefulness", 0), 0)) / math.log1p(10))
             boost += wa * (math.log1p(max(h.get("access_count", 0), 0)) / math.log1p(10))
             boost += 0.05 * (max(h.get("importance", 1), 1) - 1)
+            age = self._age_days(h.get("updated") or "")
+            if age is not None and wr > 0 and half_life > 0:
+                boost += wr * 0.5 ** (age / half_life)
             h["final_score"] = round(float(h.get("score", 0)) + boost, 4)
         hits.sort(key=lambda x: x.get("final_score", 0), reverse=True)
         return hits
@@ -171,27 +234,37 @@ class Brain:
         if config.redact_on_save and findings:
             content, findings = redact.redact(content)
 
+        # Embeddings are the slowest step: compute them BEFORE taking the
+        # process-wide lock. The dedup probe runs under the lock so concurrent
+        # saves see each other's writes.
+        qvec = None
         if config.safe_save and not allow_duplicate and content.strip():
             try:
                 qvec = self.embedder.embed_query(content)
-                hits = store.search(qvec, limit=1)
-                if hits and hits[0].get("score", 0) >= config.dedup_threshold:
-                    existing = vault.find_note(project, hits[0]["note_id"])
-                    if existing:
-                        result = existing.to_dict()
-                        result.update(
-                            duplicate=True,
-                            similarity=hits[0]["score"],
-                            chunks=0,
-                            pii_findings=findings,
-                        )
-                        return result
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.warning("dedup probe embedding failed: %s", exc)
+        chunks = chunk_text(content, config.chunk_size, config.chunk_overlap)
+        vectors = self.embedder.embed_documents(chunks) if chunks else []
 
         ents = graph.extract_entities(content, entities)
         imp = self._importance(content, category, ents, importance)
         with self._lock:
+            if qvec is not None:
+                try:
+                    hits = store.search(qvec, limit=1)
+                    if hits and hits[0].get("score", 0) >= config.dedup_threshold:
+                        existing = vault.find_note(project, hits[0]["note_id"])
+                        if existing:
+                            result = existing.to_dict()
+                            result.update(
+                                duplicate=True,
+                                similarity=hits[0]["score"],
+                                chunks=0,
+                                pii_findings=findings,
+                            )
+                            return result
+                except Exception as exc:
+                    _log.warning("dedup probe search failed: %s", exc)
             note = vault.write_note(
                 project=project,
                 content=content,
@@ -206,10 +279,14 @@ class Brain:
                 importance=imp,
                 pinned=pinned,
             )
-            n_chunks = self._index_note(store, note)
+            if not chunks:
+                chunks = [note.title]
+                vectors = self.embedder.embed_documents(chunks)
+            store.upsert_note(note, vectors, chunks)
+            self._invalidate_corpus(project)
         self._metrics["save"] += 1
         result = note.to_dict()
-        result.update(duplicate=False, chunks=n_chunks, pii_findings=findings)
+        result.update(duplicate=False, chunks=len(chunks), pii_findings=findings)
         return result
 
     # -- search ----------------------------------------------------------
@@ -232,9 +309,12 @@ class Brain:
         self._metrics["search"] += 1
         use_hybrid = config.hybrid_search if hybrid_search is None else hybrid_search
 
-        notes_by_id = {n.id: n for n, _ in vault.iter_notes(project)}
+        notes_by_id, bm25_idx = self._corpus(project)
 
         def _ok(note) -> bool:
+            # Activity notes (old search logs etc.) never surface unless asked for.
+            if note.category == "activity" and category != "activity":
+                return False
             if category and note.category != category:
                 return False
             if agent and note.agent != agent:
@@ -256,12 +336,17 @@ class Brain:
         dense_ids = [nid for nid, _ in sorted(dense_best.items(), key=lambda x: x[1], reverse=True)]
 
         if use_hybrid:
-            docs = [(n.id, f"{n.title}\n{n.content}") for n in notes_by_id.values() if _ok(n)]
-            sparse_ids = [nid for nid, _ in hybrid.bm25_rank(query, docs)]
+            sparse_ids = [nid for nid, _ in hybrid.bm25_rank_indexed(query, bm25_idx)]
             fused = hybrid.rrf_fuse(dense_ids, sparse_ids, k=config.rrf_k)
             ranked = [(nid, sc) for nid, sc in fused]
         else:
             ranked = [(nid, dense_best[nid]) for nid in dense_ids]
+
+        # Normalize relevance to [0,1] so the usefulness/access/recency boosts
+        # in _final_rank don't dwarf it (raw RRF scores max out around 0.033).
+        top = max((sc for _, sc in ranked), default=0.0)
+        if top > 0:
+            ranked = [(nid, sc / top) for nid, sc in ranked]
 
         allowed_tags = set(ontology.descendants(tag)) if tag else None
         hits: list[dict] = []
@@ -275,21 +360,24 @@ class Brain:
 
         hits = self._final_rank(hits)[:limit]
 
+        # Search logs go to a plain JSONL file (reserved "_" path, never
+        # indexed/embedded) — logging them as notes fed queries back into
+        # future retrieval.
         if log and config.log_searches and query.strip():
             try:
+                rec = {
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "agent": searched_by,
+                    "query": query,
+                    "results": len(hits),
+                }
+                path = vault.project_dir(project) / "_search_log.jsonl"
                 with self._lock:
-                    note = vault.write_note(
-                        project=project,
-                        content=f"Query: {query}\nResults: {len(hits)}",
-                        title=f"search: {query[:60]}",
-                        category="activity",
-                        tags=["search"],
-                        source="search-log",
-                        agent=searched_by,
-                    )
-                    self._index_note(store, note)
-            except Exception:
-                pass
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    with path.open("a", encoding="utf-8") as fh:
+                        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            except Exception as exc:
+                _log.warning("search log append failed: %s", exc)
         return hits
 
     def recall(
@@ -317,7 +405,14 @@ class Brain:
 
         ents = graph.entity_list(project)
         ql_tokens = set(q.replace("?", " ").split())
-        matched_entities = [e for e in ents if e["entity"].lower() in ql_tokens][:5]
+        # Exact-token match plus a substring pass so multi-word entities
+        # ("acme corp") surface too.
+        matched_entities = [
+            e
+            for e in ents
+            if e["entity"].lower() in ql_tokens
+            or (len(e["entity"]) >= 3 and e["entity"].lower() in q)
+        ][:5]
         rel_facts: list[dict] = []
         for e in matched_entities:
             rel_facts.extend(facts.current_facts(project, subject=e["entity"]))
@@ -359,7 +454,7 @@ class Brain:
             return f"- {f['subject']} {f['predicate']} {f['value']}{suffix}"
 
         sections = {
-            "soul": ("SOUL", soul_text[:800] if soul_text else ""),
+            "soul": ("SOUL", soul.soul_for_recall(soul_text, 800) if soul_text else ""),
             "directives": (
                 "Directives (always apply)",
                 "\n".join(f"- {d['title']}: {d['text'][:160]}" for d in directive_notes),
@@ -622,9 +717,14 @@ class Brain:
                 with self._lock:
                     note.access_count = int(note.access_count or 0) + 1
                     vault.update_note(note)
-                    self._index_note(self._get_store(project), note)
-            except Exception:
-                pass
+                    self._invalidate_corpus(project)
+                    self._set_payload(
+                        project,
+                        note.id,
+                        {"access_count": note.access_count, "updated": note.updated},
+                    )
+            except Exception as exc:
+                _log.warning("access tracking for note %s failed: %s", note_id, exc)
         return note.to_dict()
 
     def recent(
@@ -666,7 +766,10 @@ class Brain:
                 return None
             note.usefulness = max(0, int(note.usefulness or 0) + (1 if useful else -1))
             vault.update_note(note)
-            self._index_note(self._get_store(project), note)
+            self._invalidate_corpus(project)
+            self._set_payload(
+                project, note.id, {"usefulness": note.usefulness, "updated": note.updated}
+            )
         return {"id": note.id, "usefulness": note.usefulness}
 
     def set_archived(self, note_id: str, archived: bool, project: str | None = None) -> dict | None:
@@ -677,7 +780,10 @@ class Brain:
                 return None
             note.archived = archived
             vault.update_note(note)
-            self._index_note(self._get_store(project), note)
+            self._invalidate_corpus(project)
+            self._set_payload(
+                project, note.id, {"archived": note.archived, "updated": note.updated}
+            )
         return {"id": note.id, "archived": note.archived}
 
     # -- directives / pinned ("always apply") ---------------------------
@@ -706,7 +812,8 @@ class Brain:
                 return None
             note.pinned = pinned
             vault.update_note(note)
-            self._index_note(self._get_store(project), note)
+            self._invalidate_corpus(project)
+            self._set_payload(project, note.id, {"pinned": note.pinned, "updated": note.updated})
         return {"id": note.id, "pinned": note.pinned}
 
     def add_directive(self, text: str, project: str | None = None, agent: str = "default") -> dict:
@@ -753,6 +860,11 @@ class Brain:
             return {"error": "not a file", "path": str(path)}
         if p.suffix.lower() not in _TEXT_EXTS:
             return {"error": f"unsupported type {p.suffix}", "path": str(path)}
+        if p.stat().st_size > config.ingest_max_bytes:
+            return {
+                "error": f"file exceeds {config.ingest_max_bytes} bytes",
+                "path": str(path),
+            }
         text = p.read_text(encoding="utf-8", errors="replace")
         return self.save(
             content=text,
@@ -771,6 +883,8 @@ class Brain:
         out = []
         if base.is_dir():
             for f in sorted(base.rglob("*")):
+                if any(part in _INGEST_IGNORE for part in f.parts):
+                    continue
                 if f.is_file() and f.suffix.lower() in _TEXT_EXTS:
                     out.append(self.ingest_file(f, project=project, agent=agent))
         return out
@@ -785,7 +899,7 @@ class Brain:
         merged_into: dict[str, list[str]] = {}
         alive = {n.id for n in notes}
         for keeper in notes:
-            if keeper.id not in alive or keeper.category == "activity":
+            if keeper.id not in alive or keeper.category == "activity" or keeper.archived:
                 continue
             qvec = self.embedder.embed_query(keeper.content or keeper.title)
             for hit in store.search(qvec, limit=10):
@@ -793,18 +907,28 @@ class Brain:
                 if hid == keeper.id or hid not in alive or hit.get("score", 0) < thr:
                     continue
                 dup = vault.find_note(project, hid)
-                if not dup or dup.category == "activity":
+                if not dup or dup.category == "activity" or dup.archived:
                     continue
                 keeper.tags = sorted(set(keeper.tags) | set(dup.tags))
                 keeper.links = sorted(set(keeper.links) | set(dup.links))
-                vault.delete_note(project, hid)
-                store.delete_note(hid)
+                # The vault is the durability layer: never delete content here.
+                # Archive the duplicate and mark where it was merged.
+                dup.archived = True
+                dup.tags = sorted(set(dup.tags) | {f"merged-into:{keeper.id}"})
+                vault.update_note(dup)
+                self._set_payload(
+                    project, dup.id, {"tags": dup.tags, "updated": dup.updated}
+                )
                 alive.discard(hid)
                 removed += 1
                 merged_into.setdefault(keeper.id, []).append(hid)
             if keeper.id in merged_into:
                 vault.update_note(keeper)
-                self._index_note(store, keeper)
+                self._set_payload(
+                    project, keeper.id, {"tags": keeper.tags, "updated": keeper.updated}
+                )
+        if removed:
+            self._invalidate_corpus(project)
         return {"project": project, "removed": removed, "merged_into": merged_into}
 
     def dream(self, project: str | None = None) -> dict:
@@ -855,6 +979,7 @@ class Brain:
                         importance=3,
                     )
                     self._index_note(store, digest)
+                    self._invalidate_corpus(project)
                 for m in members:
                     clustered.add(m)
                 digests += 1
@@ -862,7 +987,7 @@ class Brain:
 
     def tick(self, project: str | None = None) -> dict:
         project = vault.sanitize_project(project)
-        store = self._get_store(project)
+        self._get_store(project)
         decayed = 0
         with self._lock:
             for note in vault.recent_notes(project, 5000):
@@ -871,10 +996,30 @@ class Brain:
                 if int(note.usefulness or 0) > 0 and int(note.access_count or 0) == 0:
                     note.usefulness = max(0, int(note.usefulness) - config.decay_step)
                     vault.update_note(note)
-                    self._index_note(store, note)
+                    self._set_payload(
+                        project, note.id, {"usefulness": note.usefulness, "updated": note.updated}
+                    )
                     decayed += 1
+            if decayed:
+                self._invalidate_corpus(project)
+        # Promote-and-close sessions idle past the retention window.
+        sessions_closed = 0
+        retention = config.session_retention_days
+        for s in session.list_sessions(project):
+            age = self._age_days(s.get("last_ts") or "")
+            if age is not None and age > retention:
+                try:
+                    self.close_session(project, s["session"])
+                    sessions_closed += 1
+                except Exception as exc:
+                    _log.warning("auto-close of session %r failed: %s", s["session"], exc)
         consolidated = self.consolidate(project)["removed"]
-        return {"project": project, "decayed": decayed, "consolidated": consolidated}
+        return {
+            "project": project,
+            "decayed": decayed,
+            "consolidated": consolidated,
+            "sessions_closed": sessions_closed,
+        }
 
     def sleep_cycle(self, project: str | None = None) -> dict:
         """A fuller maintenance pass: reflect (dream) + optionally archive stale,
@@ -894,8 +1039,12 @@ class Brain:
                     ):
                         note.archived = True
                         vault.update_note(note)
-                        self._index_note(self._get_store(project), note)
+                        self._set_payload(
+                            project, note.id, {"archived": True, "updated": note.updated}
+                        )
                         archived += 1
+                if archived:
+                    self._invalidate_corpus(project)
         report = self.doctor(project)
         return {
             "project": project,
@@ -985,14 +1134,33 @@ class Brain:
     # -- export / import -------------------------------------------------
     def export(self, project: str | None = None) -> dict:
         project = vault.sanitize_project(project)
+        base = vault.project_dir(project)
+        # Per-agent blocks live in _blocks/<agent>/<name>.md; per-agent prefs
+        # in _prefs/<agent>.md. Enumerate them from disk (setters exist for
+        # import, but no listing API).
+        agent_blocks: dict[str, dict[str, str]] = {}
+        bdir = base / "_blocks"
+        if bdir.exists():
+            for sub in sorted(p for p in bdir.iterdir() if p.is_dir()):
+                agent_blocks[sub.name] = {
+                    f.stem: f.read_text(encoding="utf-8") for f in sorted(sub.glob("*.md"))
+                }
+        pdir = base / "_prefs"
+        pref_agents = sorted(p.stem for p in pdir.glob("*.md")) if pdir.exists() else []
         return {
             "version": "0.0.1.6",
             "project": project,
             "notes": [n.to_dict() for n, _ in vault.iter_notes(project)],
             "soul": soul.get_soul(project),
+            "agent_souls": soul.list_agent_souls(project),
             "blocks": blocks.list_blocks(project),
+            "agent_blocks": agent_blocks,
             "preferences": preferences.all_prefs(project),
+            "agent_preferences": {a: preferences.all_prefs(project, a) for a in pref_agents},
             "facts": facts.all_facts(project),
+            "sessions": session.export_sessions(project),
+            "ontology": ontology.taxonomy(),
+            "not_included": ["entity aliases (global aliases.json)", "audit.log"],
         }
 
     def import_bundle(self, bundle: dict, project: str | None = None) -> dict:
@@ -1022,12 +1190,24 @@ class Brain:
                 n += 1
             if bundle.get("soul"):
                 soul.set_soul(project, bundle["soul"])
+            for agent_name, text in (bundle.get("agent_souls") or {}).items():
+                soul.set_soul(project, text, agent_name)
             for name, text in (bundle.get("blocks") or {}).items():
                 blocks.set_block(project, name, text)
+            for agent_name, blks in (bundle.get("agent_blocks") or {}).items():
+                for name, text in (blks or {}).items():
+                    blocks.set_block(project, name, text, agent_name)
             for k, v in (bundle.get("preferences") or {}).items():
                 preferences.set_pref(project, k, v)
+            for agent_name, prefs in (bundle.get("agent_preferences") or {}).items():
+                for k, v in (prefs or {}).items():
+                    preferences.set_pref(project, k, v, agent_name)
             if bundle.get("facts"):
                 facts._save(project, bundle["facts"])
+            session.import_sessions(project, bundle.get("sessions") or {})
+            for tag_name, parent in (bundle.get("ontology") or {}).items():
+                ontology.set_parent(tag_name, parent)
+            self._invalidate_corpus(project)
             self.reindex(project)
         return {"project": project, "imported_notes": n}
 
@@ -1038,6 +1218,7 @@ class Brain:
             ok = vault.delete_note(project, note_id)
             if ok:
                 self._get_store(project).delete_note(note_id)
+                self._invalidate_corpus(project)
             return ok
 
     def reindex(self, project: str | None = None) -> dict:
@@ -1091,6 +1272,40 @@ class Brain:
 
     def sessions(self, project: str | None = None) -> list[dict]:
         return session.list_sessions(vault.sanitize_project(project))
+
+    def close_session(self, project: str, session: str) -> dict:
+        """Promote a session's checkpoint trail into ONE durable summary note,
+        then mark the journal closed (renamed to .jsonl.closed)."""
+        from . import session as sessionlog  # the `session` param shadows the module
+
+        project = vault.sanitize_project(project)
+        recs = sessionlog.read_checkpoints(project, session)
+        if not recs:
+            return {"summary_note_id": None, "checkpoints": 0}
+        # No LLM: a compact structured digest of the trail (most recent last).
+        lines = [
+            f"Session '{session}': {len(recs)} checkpoints, "
+            f"{recs[0].get('ts', '?')} → {recs[-1].get('ts', '?')}.",
+            "",
+        ]
+        for r in recs[-50:]:
+            line = f"- [{r.get('ts', '')}] ({r.get('status', '')}) {r.get('note', '')[:200]}"
+            if r.get("next"):
+                line += f" | next: {r['next'][:100]}"
+            lines.append(line)
+        body = "\n".join(lines)[:8000]
+        saved = self.save(
+            content=body,
+            title=f"session summary: {session}",
+            category="notes",
+            tags=["session-summary"],
+            source=f"session:{session}",
+            agent=recs[-1].get("agent", "default"),
+            project=project,
+            allow_duplicate=True,
+        )
+        sessionlog.close(project, session)
+        return {"summary_note_id": saved.get("id"), "checkpoints": len(recs)}
 
     def metrics(self) -> dict:
         return dict(self._metrics)

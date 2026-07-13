@@ -13,6 +13,7 @@ fully local.
 
 from __future__ import annotations
 
+import os
 import re
 
 from . import resolve, vault
@@ -24,7 +25,10 @@ _HASHTAG = re.compile(r"(?<!\w)#([A-Za-z][\w-]{1,40})")
 def extract_entities(content: str, explicit: list[str] | None = None) -> list[str]:
     found: list[str] = []
     for m in _WIKILINK.findall(content or ""):
-        found.append(m.strip())
+        # [[Entity|alias]] / [[Entity#anchor]] -> keep just the entity part
+        m = m.split("|", 1)[0].split("#", 1)[0].strip()
+        if m:
+            found.append(m)
     for m in _HASHTAG.findall(content or ""):
         found.append(m.strip())
     for e in explicit or []:
@@ -49,7 +53,44 @@ def _canon_entities(ents: list[str]) -> list[str]:
     return out
 
 
+# Built graphs cached per project; token is a stat-only scan (no file reads).
+# ponytail: token = (md count, max mtime, aliases mtime) — an edit that keeps
+# the count and lands in the same mtime tick serves stale data; move to
+# per-file mtimes if that ever bites.
+_GRAPH_CACHE: dict[str, tuple[tuple, dict]] = {}
+
+
+def _vault_token(project: str) -> tuple:
+    """Cheap change token for a project's vault dir via os.scandir stats."""
+    count = 0
+    max_mtime = 0.0
+    stack = [str(vault.project_dir(project))]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for entry in it:
+                    if entry.name.startswith("_"):
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(entry.path)
+                    elif entry.name.endswith(".md"):
+                        count += 1
+                        max_mtime = max(max_mtime, entry.stat().st_mtime)
+        except OSError:
+            continue
+    try:
+        alias_mtime = resolve._path().stat().st_mtime
+    except OSError:
+        alias_mtime = 0.0
+    return (count, max_mtime, alias_mtime)
+
+
 def build_graph(project: str) -> dict:
+    project = vault.sanitize_project(project)
+    token = _vault_token(project)
+    cached = _GRAPH_CACHE.get(project)
+    if cached and cached[0] == token:
+        return cached[1]
     entities: dict[str, int] = {}
     edges: dict[str, int] = {}
     note_entities: dict[str, list[str]] = {}
@@ -63,7 +104,9 @@ def build_graph(project: str) -> dict:
                 a, b = sorted([ents[i], ents[j]])
                 key = f"{a}|||{b}"
                 edges[key] = edges.get(key, 0) + 1
-    return {"entities": entities, "edges": edges, "note_entities": note_entities}
+    g = {"entities": entities, "edges": edges, "note_entities": note_entities}
+    _GRAPH_CACHE[project] = (token, g)
+    return g
 
 
 def entity_list(project: str) -> list[dict]:

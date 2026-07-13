@@ -1,4 +1,4 @@
-.PHONY: help install dev lint fmt test check run up up-tls down logs key reindex
+.PHONY: help install dev lint fmt test check run up up-tls down logs key reindex backup
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -43,3 +43,6 @@ key:  ## Generate a new API key (usage: make key AGENT=cursor)
 reindex:  ## Rebuild the vector index from the vault
 	@curl -s -X POST http://127.0.0.1:8000/reindex \
 		-H "Authorization: Bearer $${BRAIN_API_KEY:?set BRAIN_API_KEY}" ; echo
+
+backup:  ## Back up vault + audit log to ./backups (keeps newest 7)
+	bash scripts/backup.sh
