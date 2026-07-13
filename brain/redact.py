@@ -14,9 +14,7 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("openai_key", re.compile(r"\bsk-[A-Za-z0-9]{20,}")),
     (
         "private_key_block",
-        re.compile(
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S
-        ),
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S),
     ),
     ("github_token", re.compile(r"\bghp_[A-Za-z0-9]{36}\b")),
     ("github_pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}\b")),

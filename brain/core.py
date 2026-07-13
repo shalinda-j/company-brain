@@ -916,9 +916,7 @@ class Brain:
                 dup.archived = True
                 dup.tags = sorted(set(dup.tags) | {f"merged-into:{keeper.id}"})
                 vault.update_note(dup)
-                self._set_payload(
-                    project, dup.id, {"tags": dup.tags, "updated": dup.updated}
-                )
+                self._set_payload(project, dup.id, {"tags": dup.tags, "updated": dup.updated})
                 alive.discard(hid)
                 removed += 1
                 merged_into.setdefault(keeper.id, []).append(hid)

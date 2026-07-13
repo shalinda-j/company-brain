@@ -156,8 +156,10 @@ def brain_get(note_id: str, project: str = "") -> str:
 @mcp.tool()
 def brain_recent(n: int = 20, project: str = "") -> str:
     """List the most recently updated memories in a project."""
-    items = _request("GET", "/recent", params={"n": n, "project": _proj(project)}).json().get(
-        "results", []
+    items = (
+        _request("GET", "/recent", params={"n": n, "project": _proj(project)})
+        .json()
+        .get("results", [])
     )
     if not items:
         return "No memories yet."
@@ -226,9 +228,11 @@ def brain_recall(query: str, project: str = "") -> str:
 @mcp.tool()
 def brain_related(note_id: str, project: str = "") -> str:
     """Find memories related to a given memory (by shared entities + similarity)."""
-    items = _request(
-        "GET", f"/related/{note_id}", params={"project": _proj(project)}
-    ).json().get("related", [])
+    items = (
+        _request("GET", f"/related/{note_id}", params={"project": _proj(project)})
+        .json()
+        .get("related", [])
+    )
     if not items:
         return "No related memories."
     return "\n".join(
@@ -240,8 +244,8 @@ def brain_related(note_id: str, project: str = "") -> str:
 def brain_entities(project: str = "") -> str:
     """List the knowledge-graph entities in a project (people, topics, things)
     with how often each is mentioned."""
-    items = _request("GET", "/entities", params={"project": _proj(project)}).json().get(
-        "entities", []
+    items = (
+        _request("GET", "/entities", params={"project": _proj(project)}).json().get("entities", [])
     )
     if not items:
         return "No entities yet. Mention them with [[wikilinks]] or #hashtags."
@@ -340,9 +344,7 @@ def brain_set_block(name: str, text: str, project: str = "", personal: bool = Fa
 @mcp.tool()
 def brain_blocks(project: str = "") -> str:
     """List the core memory blocks (name + content) in a project."""
-    blocks = _request("GET", "/blocks", params={"project": _proj(project)}).json().get(
-        "blocks", {}
-    )
+    blocks = _request("GET", "/blocks", params={"project": _proj(project)}).json().get("blocks", {})
     if not blocks:
         return "No blocks yet."
     return "\n\n".join(f"## {name}\n{text}" for name, text in blocks.items())
@@ -368,8 +370,10 @@ def brain_add_directive(text: str, project: str = "") -> str:
 @mcp.tool()
 def brain_directives(project: str = "") -> str:
     """List the always-applied directives pinned in a project."""
-    items = _request("GET", "/directives", params={"project": _proj(project)}).json().get(
-        "directives", []
+    items = (
+        _request("GET", "/directives", params={"project": _proj(project)})
+        .json()
+        .get("directives", [])
     )
     if not items:
         return "No directives."
@@ -383,9 +387,7 @@ def brain_directives(project: str = "") -> str:
 def brain_delete(note_id: str, project: str = "") -> str:
     """Permanently delete a memory by id (removes the note and its vectors).
     Use brain_archive instead if you might need it back."""
-    r = _request(
-        "DELETE", f"/delete/{note_id}", allow_404=True, params={"project": _proj(project)}
-    )
+    r = _request("DELETE", f"/delete/{note_id}", allow_404=True, params={"project": _proj(project)})
     if r.status_code == 404:
         return f"No memory with id={note_id}."
     return f"Deleted id={r.json()['deleted']}."

@@ -409,9 +409,7 @@ async def entity_neighbors(
 
 
 @app.get("/entities/{entity}/notes")
-async def entity_notes(
-    entity: str, project: str | None = None, agent: str = Depends(require_read)
-):
+async def entity_notes(entity: str, project: str | None = None, agent: str = Depends(require_read)):
     return {"entity": entity, "notes": brain.entity_notes(entity, project=project)}
 
 

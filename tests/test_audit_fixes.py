@@ -42,9 +42,7 @@ def test_cli_delete(monkeypatch, capsys):
 
 
 def test_cli_delete_missing_returns_error(monkeypatch, capsys):
-    cli = _cli_with_mock(
-        monkeypatch, lambda req: httpx.Response(404, json={"detail": "Not found"})
-    )
+    cli = _cli_with_mock(monkeypatch, lambda req: httpx.Response(404, json={"detail": "Not found"}))
     assert cli.main(["delete", "nope"]) == 1
     assert "error 404" in capsys.readouterr().err
 
@@ -236,9 +234,7 @@ def test_session_close_endpoint(client):
     assert r.status_code == 200
     d = r.json()
     assert d["checkpoints"] == 3 and d["summary_note_id"]
-    note = client.get(
-        f"/get/{d['summary_note_id']}", params={"project": "p"}, headers=AAA
-    ).json()
+    note = client.get(f"/get/{d['summary_note_id']}", params={"project": "p"}, headers=AAA).json()
     assert "session-summary" in note["tags"]
     assert "step 2" in note["content"]
     # Closing again finds a closed journal: nothing to summarize.
@@ -247,6 +243,4 @@ def test_session_close_endpoint(client):
 
 
 def test_session_close_validation(client):
-    assert (
-        client.post("/session/close", json={"project": "p"}, headers=AAA).status_code == 422
-    )
+    assert client.post("/session/close", json={"project": "p"}, headers=AAA).status_code == 422

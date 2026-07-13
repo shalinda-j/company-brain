@@ -4,6 +4,7 @@ activity -> reindex, plus the authenticated REST API.
 
 Run:  python tests/test_smoke.py
 """
+
 import hashlib
 import math
 import os
@@ -61,14 +62,20 @@ def main():
     b = Brain()
     section("save")
     n1 = b.save(
-        content="DigitalOcean droplet eke Qdrant + FastAPI use karala company brain ekak hadanawa. Security walata API key auth.",
+        content=(
+            "DigitalOcean droplet eke Qdrant + FastAPI use karala company brain "
+            "ekak hadanawa. Security walata API key auth."
+        ),
         title="Company brain architecture",
         category="knowledge",
         tags=["infra", "brain"],
         agent="claude-code",
     )
     n2 = b.save(
-        content="avedit kiyanne Python video editing pipeline ekak. Silence removal, color correction, AI upscaling.",
+        content=(
+            "avedit kiyanne Python video editing pipeline ekak. "
+            "Silence removal, color correction, AI upscaling."
+        ),
         title="avedit pipeline",
         category="notes",
         tags=["avedit", "python"],
@@ -159,7 +166,15 @@ def main():
 
     # good key -> works, agent resolved from key
     h = {"Authorization": "Bearer test-key-aaa"}
-    r = client.post("/save", json={"content": "n8n workflow connects brain via webhook", "title": "n8n hook", "category": "notes"}, headers=h)
+    r = client.post(
+        "/save",
+        json={
+            "content": "n8n workflow connects brain via webhook",
+            "title": "n8n hook",
+            "category": "notes",
+        },
+        headers=h,
+    )
     assert r.status_code == 200, r.text
     assert r.json()["agent"] == "claude-code"  # key aaa -> claude-code
     print("  authed /save ok, agent=", r.json()["agent"])
@@ -173,10 +188,11 @@ def main():
 
     # audit log written
     from brain.config import config as cfg
+
     assert cfg.audit_log_path.exists(), "audit log missing"
     audit_lines = cfg.audit_log_path.read_text().strip().splitlines()
-    assert any('"event": "save"' in l for l in audit_lines)
-    assert all("test-key-aaa" not in l for l in audit_lines), "raw key leaked into audit log!"
+    assert any('"event": "save"' in line for line in audit_lines)
+    assert all("test-key-aaa" not in line for line in audit_lines), "raw key leaked into audit log!"
     print("  audit log written, no raw keys leaked ✅")
 
     print("\nAPI: ALL ASSERTIONS PASSED ✅")

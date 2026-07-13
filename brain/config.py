@@ -147,9 +147,7 @@ class Config:
     # Max file size (bytes) accepted by ingest_file/ingest_dir.
     ingest_max_bytes: int = field(default_factory=lambda: _int("INGEST_MAX_BYTES", 1_048_576))
     # Sessions idle longer than this get auto-closed (summarized) by tick().
-    session_retention_days: int = field(
-        default_factory=lambda: _int("SESSION_RETENTION_DAYS", 30)
-    )
+    session_retention_days: int = field(default_factory=lambda: _int("SESSION_RETENTION_DAYS", 30))
 
     @property
     def vault_dir(self) -> Path:

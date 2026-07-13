@@ -26,6 +26,7 @@ Setup
        }
 If BRAIN_URL / BRAIN_API_KEY are not set, the hook does nothing (exits 0).
 """
+
 from __future__ import annotations
 
 import json
@@ -48,7 +49,8 @@ def _text_from_content(content) -> str:
         return content.strip()
     if isinstance(content, list):
         return "\n".join(
-            b["text"] for b in content
+            b["text"]
+            for b in content
             if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
         ).strip()
     return ""
@@ -74,7 +76,7 @@ def main() -> int:
 
     last_user = ""
     last_assistant = ""
-    with open(tpath, "r", encoding="utf-8", errors="replace") as fh:
+    with open(tpath, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -105,19 +107,23 @@ def main() -> int:
     if last_assistant:
         text += "Assistant: " + last_assistant[:MAX_SIDE]
 
-    payload = json.dumps({
-        "text": text,
-        "title": (last_user[:70] or "chat").replace("\n", " "),
-        "source": "claude-code-hook",
-        "project": project,
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "text": text,
+            "title": (last_user[:70] or "chat").replace("\n", " "),
+            "source": "claude-code-hook",
+            "project": project,
+        }
+    ).encode("utf-8")
 
     ctx = ssl.create_default_context()
     if not VERIFY_TLS:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
     req = urllib.request.Request(
-        BRAIN_URL + "/ingest", data=payload, method="POST",
+        BRAIN_URL + "/ingest",
+        data=payload,
+        method="POST",
         headers={
             "Authorization": "Bearer " + BRAIN_API_KEY,
             "Content-Type": "application/json",
