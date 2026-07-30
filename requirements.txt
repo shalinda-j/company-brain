@@ -6,7 +6,7 @@ python-dotenv>=1.0
 PyYAML>=6.0
 qdrant-client>=1.12,<2.0
 fastembed>=0.5,<1.0
-slowapi>=0.1.9
+slowapi>=0.1.10
 
 # MCP client (the portable connector)
 mcp>=1.2
